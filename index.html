@@ -63,6 +63,7 @@ tr.skip td{background:var(--row-skip)}
 button.danger{background:var(--err);border-color:var(--err);color:#fff}
 .done{color:var(--ok);font-weight:600}
 .note.err{color:var(--err)}
+.note.copied{color:var(--ok)}
 </style>
 </head>
 <body>
@@ -76,9 +77,11 @@ button.danger{background:var(--err);border-color:var(--err);color:#fff}
       <button id="lastBtn" type="button" hidden>前回のフォルダを開く</button>
       <button id="installBtn" type="button" hidden>アプリとしてインストール</button>
       <label class="opt"><input type="checkbox" id="useMtime"> 撮影日時がない場合はファイル更新日時を使用</label>
+      <label class="opt"><input type="checkbox" id="byDate"> コピー時に日付ごとのフォルダに分ける</label>
     </div>
     <div class="help">SDカードの「DCIM」フォルダ（または「100MEDIA」など）を選んでください。中のフォルダも対象になります。SDカードはFinderの左側「場所」から開けます。<br>
-    フォルダを選ぶと「ファイルの編集を許可しますか？」と表示されるので「編集を許可」を押してください。</div>
+    フォルダを選ぶと「ファイルの編集を許可しますか？」と表示されるので「編集を許可」を押してください。<br>
+    「別のドライブにコピー」では、変更後の名前で外付けHDなどにコピーします（上書きはしません）。</div>
     <div class="msg err" id="unsupported" hidden>このブラウザはファイル名の変更に対応していません。Google Chrome で開いてください。<br>（Braveの場合：アドレス欄に brave://flags と入力 →「File System Access API」を検索 → Enabled にして再起動）</div>
     <div class="summary" id="summary">選択：<b>0</b>枚</div>
     <div class="progress" id="progressBox" hidden><progress id="progress" value="0" max="1"></progress></div>
@@ -100,6 +103,7 @@ button.danger{background:var(--err);border-color:var(--err);color:#fff}
       <button class="primary danger" id="yesBtn" type="button">変更する</button></span>
     <button id="cancelBtn" type="button" hidden>中止</button>
     <button id="undoBtn" type="button" hidden>元に戻す</button>
+    <button id="copyBtn" type="button" disabled>別のドライブにコピー</button>
     <button id="clearBtn" type="button" disabled>選択を解除</button>
     <button class="primary" id="renameBtn" type="button" disabled>名前を変更</button>
   </div>
@@ -123,7 +127,7 @@ const $ = id => document.getElementById(id);
 const el = { pickBtn:$('pickBtn'), useMtime:$('useMtime'), summary:$('summary'), unsupported:$('unsupported'),
   progressBox:$('progressBox'), progress:$('progress'), msg:$('msg'), tbody:$('tbody'),
   cancelBtn:$('cancelBtn'), lastBtn:$('lastBtn'), installBtn:$('installBtn'), clearBtn:$('clearBtn'), renameBtn:$('renameBtn'), undoBtn:$('undoBtn'),
-  confirmBox:$('confirmBox'), confirmText:$('confirmText'), yesBtn:$('yesBtn'), noBtn:$('noBtn') };
+  copyBtn:$('copyBtn'), byDate:$('byDate'), confirmBox:$('confirmBox'), confirmText:$('confirmText'), yesBtn:$('yesBtn'), noBtn:$('noBtn') };
 
 /* ドラッグ＆ドロップは使わない（誤ってドロップしてもページが切り替わらないように無効化） */
 ['dragover','drop'].forEach(t => window.addEventListener(t, e => { e.preventDefault(); if (t === 'drop') setMsg('ドラッグ＆ドロップには対応していません。「フォルダを選択」を使ってください。'); }));
@@ -589,6 +593,7 @@ function renderRow(it){
     c3.appendChild(document.createTextNode('スキップ'));
     if (note) c3.appendChild(span('note', note));
   }
+  if (it.copyNote) c3.appendChild(span('note ' + (it.copyOk ? 'copied' : 'err'), it.copyNote));
   it.tr.className = (skip && it.status !== 'pending' && it.status !== 'reading') ? 'skip' : '';
 }
 
@@ -600,6 +605,7 @@ function createRow(it){
   return tr;
 }
 
+function toCopy(){ return state.items.filter(i => i.newName); }
 function toRename(){ return state.items.filter(i => !i.renamed && i.newName && i.newName !== i.name); }
 
 function updateSummary(){
@@ -622,6 +628,10 @@ function updateSummary(){
   el.renameBtn.disabled = state.busy || todo === 0 || done !== total || !supported();
   el.renameBtn.textContent = todo ? `名前を変更（${todo}件）` : '名前を変更';
   el.undoBtn.hidden = state.busy || renamed === 0;
+  const nCopy = toCopy().length;
+  el.copyBtn.disabled = state.busy || nCopy === 0 || done !== total;
+  el.copyBtn.textContent = nCopy ? `別のドライブにコピー（${nCopy}件）` : '別のドライブにコピー';
+  el.byDate.disabled = state.busy;
   el.pickBtn.disabled = state.busy || !supported();
   el.lastBtn.disabled = state.busy;
   el.useMtime.disabled = state.busy;
@@ -693,7 +703,7 @@ async function openRoot(root){
       }
     }
   } catch(e){}
-  state.items = []; state.dirs = []; state.rootName = root.name;
+  state.items = []; state.dirs = []; state.rootName = root.name; state.root = root;
   el.tbody.textContent = '';
   setBusy(true);
   const out = { dirs: [], files: [], truncated: false };
@@ -835,12 +845,16 @@ el.renameBtn.addEventListener('click', () => {
   const n = toRename().length;
   if (!n) return;
   el.confirmText.textContent = `${n}件のファイル名を変更します。よろしいですか？`;
+  state.pending = 'rename';
   el.confirmBox.hidden = false;
 });
 el.noBtn.addEventListener('click', () => { el.confirmBox.hidden = true; });
 
 el.yesBtn.addEventListener('click', async () => {
   if (state.busy) return;
+  if (state.pending === 'copy') return runCopy();
+  if (state.pending !== 'rename') return;
+  state.pending = '';
   const list = toRename();
   setBusy(true);
   let r;
@@ -868,6 +882,110 @@ el.undoBtn.addEventListener('click', async () => {
   refreshNames();
   setMsg(`${r.doneCount}件を元の名前に戻しました。` + (r.failed ? ` ${r.failed}件は戻せませんでした。` : ''), r.failed ? 'err' : 'ok');
 });
+
+/* ---------------- 別のドライブにコピー ---------------- */
+function fmtSize(b){ if (b >= 1e9) return (b / 1e9).toFixed(1) + 'GB'; if (b >= 1e6) return Math.round(b / 1e6) + 'MB'; return Math.max(1, Math.round(b / 1e3)) + 'KB'; }
+
+el.copyBtn.addEventListener('click', async () => {
+  if (state.busy) return;
+  const list = toCopy();
+  if (!list.length) return;
+  let dest;
+  try { dest = await window.showDirectoryPicker({ id: 'photo-renamer-dest', mode: 'readwrite' }); }
+  catch (e){ if (e && e.name !== 'AbortError') setMsg('コピー先を開けませんでした：' + (e.message || e.name), 'err'); return; }
+  try {
+    if (dest.queryPermission && (await dest.queryPermission({ mode: 'readwrite' })) !== 'granted'){
+      if ((await dest.requestPermission({ mode: 'readwrite' })) !== 'granted'){ setMsg('コピーするには「編集を許可」が必要です。', 'err'); return; }
+    }
+  } catch(e){}
+  // コピー元と同じフォルダ、またはその中は選べない
+  try {
+    if (state.root && ((await state.root.isSameEntry(dest)) || (await state.root.resolve(dest)) !== null)){
+      setMsg('コピー元（SDカード）と同じフォルダ、またはその中のフォルダは選べません。別のドライブのフォルダを選んでください。', 'err'); return;
+    }
+  } catch(e){}
+  let total = 0;
+  for (const it of list){ try { total += (await it.handle.getFile()).size; } catch(e){} }
+  state.copyDest = dest;
+  state.pending = 'copy';
+  el.confirmText.textContent = `${list.length}件（${fmtSize(total)}）を「${dest.name}」にコピーします。よろしいですか？`;
+  el.yesBtn.textContent = 'コピーする';
+  el.confirmBox.hidden = false;
+});
+el.noBtn.addEventListener('click', () => { state.pending = ''; el.yesBtn.textContent = '変更する'; });
+
+async function copyOne(it, destRoot, byDate){
+  let dir = destRoot;
+  if (byDate && it.eff){ const d = it.eff.d; dir = await destRoot.getDirectoryHandle(`${d.y}-${pad(d.mo)}-${pad(d.d)}`, { create: true }); }
+  const name = it.newName;
+  const src = await it.handle.getFile();
+  let existing = null;
+  try { existing = await (await dir.getFileHandle(name)).getFile(); }
+  catch (e){ if (!e || e.name !== 'NotFoundError') throw e; }
+  if (existing) return existing.size === src.size ? 'exists' : 'conflict';   // 上書きはしない
+  const fh = await dir.getFileHandle(name, { create: true });
+  let w = null;
+  try {
+    w = await fh.createWritable();
+    await w.write(src);
+    await w.close(); w = null;
+    const out = await fh.getFile();
+    if (out.size !== src.size) throw new Error('サイズが一致しません');
+    return 'copied';
+  } catch (e){
+    if (w){ try { await w.abort(); } catch(_){} }
+    try { await dir.removeEntry(name); } catch(_){}   // 途中までのファイルは残さない
+    throw e;
+  }
+}
+
+async function runCopy(){
+  state.pending = '';
+  el.yesBtn.textContent = '変更する';
+  const dest = state.copyDest;
+  const list = toCopy().sort((a, b) => a.newName.localeCompare(b.newName));
+  const byDate = el.byDate.checked;
+  setBusy(true);
+  const sizes = [];
+  for (const it of list){ try { sizes.push((await it.handle.getFile()).size); } catch(e){ sizes.push(0); } }
+  const totalBytes = sizes.reduce((a, b) => a + b, 0);
+  el.progress.max = Math.max(1, totalBytes); el.progress.value = 0;
+  let doneBytes = 0, copied = 0, exists = 0, conflict = 0, failed = 0, stopped = '';
+  for (let i = 0; i < list.length; i++){
+    const it = list[i];
+    if (state.cancel){ stopped = 'cancel'; break; }
+    setMsg(`コピー中… ${i + 1} / ${list.length}（${fmtSize(doneBytes)} / ${fmtSize(totalBytes)}）`);
+    try {
+      const r = await copyOne(it, dest, byDate);
+      if (r === 'copied'){ copied++; it.copyOk = true; it.copyNote = 'コピー済み'; }
+      else if (r === 'exists'){ exists++; it.copyOk = true; it.copyNote = 'コピー先に同じファイルあり（スキップ）'; }
+      else { conflict++; it.copyOk = false; it.copyNote = 'コピー先に同じ名前の別ファイルあり（上書きしません）'; }
+    } catch (e){
+      failed++; it.copyOk = false;
+      const n = (e && e.name) || '';
+      it.copyNote = 'コピーできませんでした（' + (n || (e && e.message) || 'エラー') + '）';
+      if (n === 'QuotaExceededError'){ stopped = 'full'; renderRow(it); break; }
+      if (n === 'NotFoundError' || n === 'NotReadableError'){
+        // コピー先ドライブが外れた場合などは続けない
+        try { for await (const _ of dest.keys()) break; } catch(_){ stopped = 'dest'; renderRow(it); break; }
+      }
+    }
+    doneBytes += sizes[i];
+    el.progress.value = doneBytes;
+    renderRow(it);
+    await sleep(0);
+  }
+  setBusy(false);
+  updateSummary();
+  let m = `「${dest.name}」に${copied}件コピーしました。`;
+  if (exists) m += ` ${exists}件はコピー済みのためスキップしました。`;
+  if (conflict) m += ` ${conflict}件は同じ名前の別ファイルがあるためコピーしませんでした。`;
+  if (failed) m += ` ${failed}件はコピーできませんでした。`;
+  if (stopped === 'cancel') m = '中止しました。' + m;
+  if (stopped === 'full') m = 'コピー先の空き容量が足りないため中止しました。' + m;
+  if (stopped === 'dest') m = 'コピー先のドライブが見つからないため中止しました。' + m;
+  setMsg(m, (conflict || failed || stopped) ? 'err' : 'ok');
+}
 
 window.addEventListener('beforeunload', e => { if (state.busy){ e.preventDefault(); e.returnValue = ''; } });
 
