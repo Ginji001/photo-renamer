@@ -1,0 +1,895 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>撮影日時リネーマー</title>
+<meta name="theme-color" content="#1f6feb">
+<meta name="description" content="写真・動画のファイル名を撮影日時に変更します">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<style>
+:root{
+  --bg:#f6f6f3; --panel:#ffffff; --text:#1d1d1f; --muted:#6b6b70; --line:#e2e2de;
+  --accent:#1f6feb; --accent-text:#ffffff; --ok:#1a7f37; --warn:#b35900; --err:#c62828;
+  --row-skip:#fbf6ee;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#1b1b1d; --panel:#242427; --text:#ececef; --muted:#a0a0a8; --line:#3a3a3f;
+    --accent:#4c8dff; --accent-text:#0b0b0c; --ok:#56c271; --warn:#f0a44b; --err:#ff6b6b;
+    --row-skip:#2c2822;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:15px/1.6 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif}
+main{max-width:1000px;margin:0 auto;padding:28px 16px 120px}
+h1{font-size:26px;margin:0 0 4px;letter-spacing:.02em}
+.privacy{color:var(--muted);font-size:13px;margin:0 0 20px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--text);
+  padding:9px 18px;border-radius:9px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-text);font-weight:600}
+button:disabled{opacity:.45;cursor:not-allowed}
+.file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.opt{font-size:14px;color:var(--muted);display:flex;gap:6px;align-items:center;cursor:pointer}
+.summary{margin:14px 0 0;font-size:14px}
+.summary b{font-variant-numeric:tabular-nums}
+.progress{margin-top:12px}
+progress{width:100%;height:10px}
+.msg{margin-top:10px;font-size:14px;min-height:1.4em}
+.msg.err{color:var(--err)} .msg.ok{color:var(--ok)}
+.table-wrap{margin-top:16px;overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:640px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:600;color:var(--muted);font-size:12px;position:sticky;top:0;background:var(--panel)}
+td.name{word-break:break-all}
+td.date{white-space:nowrap;font-variant-numeric:tabular-nums}
+td.new{font-family:ui-monospace,Menlo,monospace;font-size:13px;word-break:break-all}
+tr.skip td{background:var(--row-skip)}
+.note{display:block;font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans",sans-serif;font-size:12px;color:var(--warn)}
+.new .ok{color:var(--ok)}
+.muted{color:var(--muted)}
+.empty{padding:28px;text-align:center;color:var(--muted)}
+.bar{position:fixed;left:0;right:0;bottom:0;background:var(--panel);border-top:1px solid var(--line);
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px))}
+.bar .row{max-width:1000px;margin:0 auto;justify-content:flex-end}
+.help{font-size:13px;color:var(--muted);margin-top:10px}
+.confirm{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:14px;font-weight:600;margin-right:auto}
+.confirm[hidden]{display:none}
+button.danger{background:var(--err);border-color:var(--err);color:#fff}
+.done{color:var(--ok);font-weight:600}
+.note.err{color:var(--err)}
+</style>
+</head>
+<body>
+<main>
+  <h1>撮影日時リネーマー</h1>
+  <p class="privacy">写真・動画（AVI）のファイル名を、撮影日時の名前に変更します。ファイルは外部へアップロードされません。</p>
+
+  <div class="panel">
+    <div class="row">
+      <button class="primary" id="pickBtn" type="button">フォルダを選択</button>
+      <button id="lastBtn" type="button" hidden>前回のフォルダを開く</button>
+      <button id="installBtn" type="button" hidden>アプリとしてインストール</button>
+      <label class="opt"><input type="checkbox" id="useMtime"> 撮影日時がない場合はファイル更新日時を使用</label>
+    </div>
+    <div class="help">SDカードの「DCIM」フォルダ（または「100MEDIA」など）を選んでください。中のフォルダも対象になります。SDカードはFinderの左側「場所」から開けます。<br>
+    フォルダを選ぶと「ファイルの編集を許可しますか？」と表示されるので「編集を許可」を押してください。</div>
+    <div class="msg err" id="unsupported" hidden>このブラウザはファイル名の変更に対応していません。Google Chrome で開いてください。<br>（Braveの場合：アドレス欄に brave://flags と入力 →「File System Access API」を検索 → Enabled にして再起動）</div>
+    <div class="summary" id="summary">選択：<b>0</b>枚</div>
+    <div class="progress" id="progressBox" hidden><progress id="progress" value="0" max="1"></progress></div>
+    <div class="msg" id="msg"></div>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th style="width:30%">元ファイル</th><th style="width:22%">撮影日時</th><th>変更後</th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="3" class="empty">「フォルダを選択」から写真・動画のフォルダを選んでください</td></tr></tbody>
+    </table>
+  </div>
+</main>
+
+<div class="bar">
+  <div class="row">
+    <span class="confirm" id="confirmBox" hidden><span id="confirmText"></span>
+      <button id="noBtn" type="button">やめる</button>
+      <button class="primary danger" id="yesBtn" type="button">変更する</button></span>
+    <button id="cancelBtn" type="button" hidden>中止</button>
+    <button id="undoBtn" type="button" hidden>元に戻す</button>
+    <button id="clearBtn" type="button" disabled>選択を解除</button>
+    <button class="primary" id="renameBtn" type="button" disabled>名前を変更</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+(function(){
+
+/* ---------------- 設定 ---------------- */
+const SUPPORTED = new Set(['jpg','jpeg','heic','heif','png','dng','arw','cr2','cr3','nef','orf','raf','rw2','avi']);
+const READ_LIMIT = 3000;          // 1ファイルあたりの読み取り回数上限（暴走防止）
+const FILE_TIMEOUT = 20000;       // 1ファイルの解析タイムアウト(ms)
+const MAX_FILES = 20000;          // 1回で扱うファイル数の上限
+const MAX_DEPTH = 4;              // サブフォルダをたどる深さ
+const HEAD_SIZE = 256 * 1024;
+
+/* ---------------- 状態 ---------------- */
+const state = { items: [], busy: false, cancel: false, seq: 0 };
+const $ = id => document.getElementById(id);
+const el = { pickBtn:$('pickBtn'), useMtime:$('useMtime'), summary:$('summary'), unsupported:$('unsupported'),
+  progressBox:$('progressBox'), progress:$('progress'), msg:$('msg'), tbody:$('tbody'),
+  cancelBtn:$('cancelBtn'), lastBtn:$('lastBtn'), installBtn:$('installBtn'), clearBtn:$('clearBtn'), renameBtn:$('renameBtn'), undoBtn:$('undoBtn'),
+  confirmBox:$('confirmBox'), confirmText:$('confirmText'), yesBtn:$('yesBtn'), noBtn:$('noBtn') };
+
+/* ドラッグ＆ドロップは使わない（誤ってドロップしてもページが切り替わらないように無効化） */
+['dragover','drop'].forEach(t => window.addEventListener(t, e => { e.preventDefault(); if (t === 'drop') setMsg('ドラッグ＆ドロップには対応していません。「フォルダを選択」を使ってください。'); }));
+
+window.addEventListener('error', e => { setMsg('エラーが発生しました：' + (e.message || '不明'), 'err'); });
+window.addEventListener('unhandledrejection', e => { setMsg('エラーが発生しました：' + ((e.reason && e.reason.message) || '不明'), 'err'); });
+
+/* ---------------- ユーティリティ ---------------- */
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+function extOf(n){ const i = n.lastIndexOf('.'); return i > 0 ? n.slice(i + 1) : ''; }
+function stemOf(n){ const i = n.lastIndexOf('.'); return i > 0 ? n.slice(0, i) : n; }
+function pad(n, w){ return String(n).padStart(w || 2, '0'); }
+function setMsg(t, cls){ el.msg.textContent = t || ''; el.msg.className = 'msg' + (cls ? ' ' + cls : ''); }
+function withTimeout(p, ms){
+  let t; return Promise.race([p, new Promise((_, rej) => { t = setTimeout(() => rej(new Error('timeout')), ms); })]).finally(() => clearTimeout(t));
+}
+
+async function view(file, off, len, ctx){
+  if (ctx && ++ctx.reads > READ_LIMIT) throw new Error('read limit');
+  if (!(off >= 0) || off >= file.size || !(len > 0)) throw new Error('range');
+  len = Math.min(len, file.size - off);
+  // 先頭部分は1回だけ読み込んで使い回す（SDカードでの読み取り回数を減らす）
+  if (ctx && off + len <= HEAD_SIZE){
+    if (!ctx.head) ctx.head = await file.slice(0, Math.min(file.size, HEAD_SIZE)).arrayBuffer();
+    if (off + len <= ctx.head.byteLength) return new DataView(ctx.head, off, len);
+  }
+  const buf = await file.slice(off, off + len).arrayBuffer();
+  return new DataView(buf);
+}
+function fourcc(dv, o){ if (o + 4 > dv.byteLength) return ''; return String.fromCharCode(dv.getUint8(o), dv.getUint8(o+1), dv.getUint8(o+2), dv.getUint8(o+3)); }
+function asciiZ(dv, o, n){ let s = ''; const end = Math.min(dv.byteLength, o + n); for (let i = o; i < end; i++){ const c = dv.getUint8(i); if (c === 0) break; s += String.fromCharCode(c); } return s; }
+function latin1(dv){ return new TextDecoder('latin1').decode(new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength)); }
+function startsWith(dv, o, str){ if (o + str.length > dv.byteLength) return false; for (let i = 0; i < str.length; i++){ if (dv.getUint8(o + i) !== str.charCodeAt(i)) return false; } return true; }
+function u64(dv, o){ return dv.getUint32(o) * 4294967296 + dv.getUint32(o + 4); }
+
+function parseDateStr(s){
+  if (!s) return null;
+  const m = /^\s*(\d{4})[:\-](\d{2})[:\-](\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?/.exec(s);
+  if (!m) return null;
+  const y=+m[1], mo=+m[2], d=+m[3], h=+m[4], mi=+m[5], se=m[6] ? +m[6] : 0;
+  if (y < 1900 || y > 2200 || mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || se > 60) return null;
+  return { y, mo, d, h, mi, s: Math.min(se, 59) };
+}
+
+/* ---------------- TIFF / EXIF ---------------- */
+async function parseTiff(file, base, ctx, res){
+  const h = await view(file, base, 8, ctx);
+  if (h.byteLength < 8) return;
+  const bo = h.getUint16(0);
+  let le; if (bo === 0x4949) le = true; else if (bo === 0x4D4D) le = false; else return;
+  const seen = new Set();
+  async function readIFD(off){
+    if (!off || off < 8 || seen.has(off) || seen.size > 8) return 0;
+    seen.add(off);
+    const abs = base + off; if (abs + 2 > file.size) return 0;
+    const n = (await view(file, abs, 2, ctx)).getUint16(0, le);
+    if (n === 0 || n > 1000) return 0;
+    const dv = await view(file, abs + 2, n * 12, ctx);
+    let exifPtr = 0;
+    for (let i = 0; i < n; i++){
+      const e = i * 12; if (e + 12 > dv.byteLength) break;
+      const tag = dv.getUint16(e, le), type = dv.getUint16(e + 2, le), cnt = dv.getUint32(e + 4, le);
+      if (tag === 0x8769){ exifPtr = dv.getUint32(e + 8, le); continue; }
+      if ((tag === 0x9003 || tag === 0x9004 || tag === 0x0132) && type === 2 && cnt >= 16 && cnt <= 64){
+        const key = tag === 0x9003 ? 'original' : tag === 0x9004 ? 'digitized' : 'datetime';
+        if (res[key]) continue;
+        const vo = dv.getUint32(e + 8, le);
+        if (base + vo >= file.size) continue;
+        const s = asciiZ(await view(file, base + vo, cnt, ctx), 0, cnt);
+        if (parseDateStr(s)) res[key] = s;
+      }
+    }
+    return exifPtr;
+  }
+  const exifPtr = await readIFD(h.getUint32(4, le));
+  if (exifPtr) await readIFD(exifPtr);
+}
+
+/* ---------------- JPEG ---------------- */
+async function parseJpeg(file, base, ctx, res){
+  let p = base + 2;
+  for (let g = 0; g < 300 && p + 4 <= file.size; g++){
+    const m = await view(file, p, 4, ctx);
+    if (m.getUint8(0) !== 0xFF) break;
+    const mk = m.getUint8(1);
+    if (mk === 0xFF){ p += 1; continue; }
+    if (mk === 0xD8 || mk === 0x01 || (mk >= 0xD0 && mk <= 0xD7)){ p += 2; continue; }
+    if (mk === 0xDA || mk === 0xD9) break;
+    const len = m.getUint16(2);
+    if (len < 2) break;
+    if (mk === 0xE1 && len > 8){
+      const sig = await view(file, p + 4, Math.min(len - 2, 40), ctx);
+      if (startsWith(sig, 0, 'Exif\0')){
+        try { await parseTiff(file, p + 10, ctx, res); } catch(e){}
+      } else if (startsWith(sig, 0, 'http://ns.adobe.com/xap/1.0/') && len < 2000000){
+        res.xmp = (res.xmp || '') + latin1(await view(file, p + 4, len - 2, ctx));
+      }
+    }
+    if (res.original) break;
+    p += 2 + len;
+  }
+}
+
+/* ---------------- PNG ---------------- */
+async function parsePng(file, ctx, res){
+  let p = 8;
+  for (let g = 0; g < 2000 && p + 12 <= file.size; g++){
+    const h = await view(file, p, 8, ctx);
+    const len = h.getUint32(0), type = fourcc(h, 4);
+    if (type === 'eXIf' && len > 8){
+      let b = p + 8;
+      const s = await view(file, b, 6, ctx);
+      if (startsWith(s, 0, 'Exif\0')) b += 6;
+      try { await parseTiff(file, b, ctx, res); } catch(e){}
+    } else if ((type === 'iTXt' || type === 'tEXt' || type === 'zTXt') && len < 2000000){
+      const t = latin1(await view(file, p + 8, len, ctx));
+      if (/DateTimeOriginal|CreateDate|DateCreated/.test(t)) res.xmp = (res.xmp || '') + t;
+    } else if (type === 'IEND') break;
+    if (res.original) break;
+    p += 12 + len;
+  }
+}
+
+/* ---------------- ISOBMFF (HEIC / HEIF / CR3) ---------------- */
+async function fileBoxes(file, start, end, ctx){
+  const out = [];
+  let p = start;
+  for (let g = 0; g < 500 && p + 8 <= end; g++){
+    const h = await view(file, p, 16, ctx);
+    let size = h.getUint32(0), hdr = 8;
+    const type = fourcc(h, 4);
+    if (size === 1){ if (h.byteLength < 16) break; size = u64(h, 8); hdr = 16; }
+    else if (size === 0) size = end - p;
+    if (size < hdr) break;
+    out.push({ type, off: p, size, hdr });
+    p += size;
+  }
+  return out;
+}
+function memBoxes(dv, start, end){
+  const out = [];
+  let p = start; end = Math.min(end, dv.byteLength);
+  for (let g = 0; g < 2000 && p + 8 <= end; g++){
+    let size = dv.getUint32(p), hdr = 8;
+    const type = fourcc(dv, p + 4);
+    if (size === 1){ if (p + 16 > end) break; size = u64(dv, p + 8); hdr = 16; }
+    else if (size === 0) size = end - p;
+    if (size < hdr || p + size > end) break;
+    out.push({ type, off: p, size, hdr });
+    p += size;
+  }
+  return out;
+}
+
+async function parseHeifMeta(file, metaAbs, dv, ctx, res){
+  const kids = memBoxes(dv, 12, dv.byteLength); // 8(box)+4(fullbox)
+  const exifIds = new Set();
+  const iinf = kids.find(b => b.type === 'iinf');
+  if (iinf){
+    const v = dv.getUint8(iinf.off + iinf.hdr);
+    const p = iinf.off + iinf.hdr + 4 + (v === 0 ? 2 : 4);
+    for (const b of memBoxes(dv, p, iinf.off + iinf.size)){
+      if (b.type !== 'infe') continue;
+      const iv = dv.getUint8(b.off + b.hdr);
+      if (iv < 2) continue;
+      let q = b.off + b.hdr + 4;
+      const id = iv === 2 ? dv.getUint16(q) : dv.getUint32(q);
+      q += (iv === 2 ? 2 : 4) + 2;
+      if (fourcc(dv, q) === 'Exif') exifIds.add(id);
+    }
+  }
+  const iloc = kids.find(b => b.type === 'iloc');
+  const idat = kids.find(b => b.type === 'idat');
+  if (!iloc || exifIds.size === 0) return;
+  let p = iloc.off + iloc.hdr;
+  const v = dv.getUint8(p); p += 4;
+  const b1 = dv.getUint8(p++), b2 = dv.getUint8(p++);
+  const offSize = b1 >> 4, lenSize = b1 & 15, baseSize = b2 >> 4, idxSize = (v === 1 || v === 2) ? (b2 & 15) : 0;
+  const readN = n => { let x = 0; if (n === 4) x = dv.getUint32(p); else if (n === 8) x = u64(dv, p); p += n; return x; };
+  const count = v < 2 ? dv.getUint16(p) : dv.getUint32(p); p += v < 2 ? 2 : 4;
+  const end = iloc.off + iloc.size;
+  for (let i = 0; i < count && i < 10000 && p < end; i++){
+    const id = v < 2 ? dv.getUint16(p) : dv.getUint32(p); p += v < 2 ? 2 : 4;
+    let cm = 0;
+    if (v === 1 || v === 2){ cm = dv.getUint16(p) & 15; p += 2; }
+    p += 2;
+    const baseOff = readN(baseSize);
+    const ext = dv.getUint16(p); p += 2;
+    let first = null;
+    for (let e = 0; e < ext; e++){
+      p += idxSize;
+      const eo = readN(offSize), el2 = readN(lenSize);
+      if (!first) first = { eo, el: el2 };
+    }
+    if (!exifIds.has(id) || !first) continue;
+    let abs;
+    if (cm === 0) abs = baseOff + first.eo;
+    else if (cm === 1 && idat) abs = metaAbs + idat.off + idat.hdr + baseOff + first.eo;
+    else continue;
+    try {
+      const head = await view(file, abs, 64, ctx);
+      let tiff = -1;
+      const skip = head.getUint32(0);
+      if (skip < 60 && (head.getUint16(4 + skip) === 0x4949 || head.getUint16(4 + skip) === 0x4D4D)) tiff = abs + 4 + skip;
+      else {
+        for (let k = 0; k + 4 <= head.byteLength; k++){
+          const w = head.getUint16(k);
+          if ((w === 0x4949 && head.getUint16(k + 2) === 0x2A00) || (w === 0x4D4D && head.getUint16(k + 2) === 0x002A)){ tiff = abs + k; break; }
+        }
+      }
+      if (tiff >= 0) await parseTiff(file, tiff, ctx, res);
+    } catch(e){}
+    if (res.original) return;
+  }
+}
+
+const CANON_UUID = [0x85,0xc0,0xb6,0x87,0x82,0x0f,0x11,0xe0,0x81,0x11,0xf4,0xce,0x46,0x2b,0x6a,0x48];
+async function parseIsoBmff(file, ctx, res){
+  const top = await fileBoxes(file, 0, file.size, ctx);
+  const meta = top.find(b => b.type === 'meta');
+  if (meta && meta.size < 32 * 1024 * 1024){
+    const dv = await view(file, meta.off + meta.hdr - 8, meta.size - meta.hdr + 8, ctx);
+    await parseHeifMeta(file, meta.off + meta.hdr - 8, dv, ctx, res);
+  }
+  const moov = top.find(b => b.type === 'moov');
+  if (moov && !res.original){
+    for (const b of await fileBoxes(file, moov.off + moov.hdr, moov.off + moov.size, ctx)){
+      if (b.type !== 'uuid') continue;
+      const u = await view(file, b.off + b.hdr, 16, ctx);
+      if (!CANON_UUID.every((x, i) => u.getUint8(i) === x)) continue;
+      for (const c of await fileBoxes(file, b.off + b.hdr + 16, b.off + b.size, ctx)){
+        if (/^CMT[12]$/.test(c.type)){ try { await parseTiff(file, c.off + c.hdr, ctx, res); } catch(e){} }
+      }
+    }
+  }
+}
+
+/* ---------------- AVI ---------------- */
+const MONTHS = {JAN:1,FEB:2,MAR:3,APR:4,MAY:5,JUN:6,JUL:7,AUG:8,SEP:9,OCT:10,NOV:11,DEC:12};
+function parseIdit(s){
+  const d = parseDateStr(s.replace(/\//g, ':'));
+  if (d) return d;
+  const m = /([A-Za-z]{3})\s+(\d{1,2})\s+(\d{1,2}):(\d{2}):(\d{2})\s+(\d{4})/.exec(s);
+  if (!m || !MONTHS[m[1].toUpperCase()]) return null;
+  return parseDateStr(`${m[6]}:${pad(MONTHS[m[1].toUpperCase()])}:${pad(+m[2])} ${pad(+m[3])}:${m[4]}:${m[5]}`);
+}
+async function parseAvi(file, ctx, res){
+  async function walk(start, end, depth){
+    let p = start;
+    for (let g = 0; g < 300 && p + 8 <= end; g++){
+      const h = await view(file, p, 12, ctx);
+      if (h.byteLength < 8) return true;
+      const id = fourcc(h, 0), size = h.getUint32(4, true);
+      if (id === 'LIST' && h.byteLength >= 12){
+        const lt = fourcc(h, 8);
+        if (lt === 'movi') return true;                 // 映像データ本体に入ったら終了
+        if (depth < 4 && /^(hdrl|strl|INFO|ncdt)$/.test(lt)){
+          if (await walk(p + 12, Math.min(end, p + 8 + size), depth + 1)) return true;
+        }
+      } else if (id === 'IDIT' && size > 0 && size < 256){
+        const d = parseIdit(asciiZ(await view(file, p + 8, size, ctx), 0, size));
+        if (d){ res.avi = d; return true; }
+      } else if (id === 'strd' && size >= 18 && size < 65536){
+        // ドライブレコーダー等（Jeilin CDVR）：年(2000年起点)・月・日・時・分・秒 の6バイト
+        const dv = await view(file, p + 8, Math.min(size, 64), ctx);
+        if (startsWith(dv, 0, 'Jeilin') && dv.byteLength >= 18){
+          const b = i => dv.getUint8(12 + i);
+          const d = parseDateStr(`${2000 + b(0)}:${pad(b(1))}:${pad(b(2))} ${pad(b(3))}:${pad(b(4))}:${pad(b(5))}`);
+          if (d){ res.avi = d; return true; }
+        }
+      }
+      if (!(size >= 0)) return true;
+      p += 8 + size + (size & 1);
+    }
+    return false;
+  }
+  const riffSize = (await view(file, 4, 4, ctx)).getUint32(0, true);
+  await walk(12, Math.min(file.size, 8 + riffSize), 0);
+}
+
+/* ---------------- XMP（予備） ---------------- */
+function xmpDate(s){
+  if (!s) return null;
+  for (const tag of ['exif:DateTimeOriginal', 'photoshop:DateCreated', 'xmp:CreateDate', 'exif:DateTimeDigitized']){
+    const re = new RegExp(tag.replace(':', '\\:') + '\\s*(?:=\\s*["\']|>)\\s*(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(?::\\d{2})?)');
+    const m = re.exec(s);
+    if (m){ const d = parseDateStr(m[1]); if (d) return d; }
+  }
+  return null;
+}
+
+/* ---------------- 1ファイル解析 ---------------- */
+async function readShotDate(file){
+  const ctx = { reads: 0 };
+  const res = {};
+  if (file.size < 16) throw new Error('small');
+  const h = await view(file, 0, 32, ctx);
+  const w = h.getUint16(0);
+  let kind = '';
+  if (w === 0xFFD8){ kind = 'jpeg'; await parseJpeg(file, 0, ctx, res); }
+  else if (h.getUint32(0) === 0x89504E47){ kind = 'png'; await parsePng(file, ctx, res); }
+  else if (fourcc(h, 4) === 'ftyp'){ kind = 'iso'; await parseIsoBmff(file, ctx, res); }
+  else if (startsWith(h, 0, 'RIFF') && fourcc(h, 8) === 'AVI '){
+    await parseAvi(file, ctx, res);
+    return { kind: 'avi', date: res.avi || null, src: res.avi ? 'AVI' : '' };
+  }
+  else if (startsWith(h, 0, 'FUJIFILM')){
+    kind = 'raf';
+    const hdr = await view(file, 0, 100, ctx);
+    const jo = hdr.getUint32(84);
+    if (jo > 0 && jo + 4 < file.size){
+      const j = await view(file, jo, 2, ctx);
+      if (j.getUint16(0) === 0xFFD8) await parseJpeg(file, jo, ctx, res);
+    }
+  }
+  else if (w === 0x4949 || w === 0x4D4D){ kind = 'tiff'; await parseTiff(file, 0, ctx, res); }
+  else return { kind: 'unknown', date: null };
+
+  let date = parseDateStr(res.original), src = 'DateTimeOriginal';
+  if (!date){ date = parseDateStr(res.digitized); src = 'DateTimeDigitized'; }
+  if (!date && !res.xmp && kind !== 'tiff'){
+    try { res.xmp = latin1(await view(file, 0, 1024 * 1024, ctx)); } catch(e){}
+  }
+  if (!date){ date = xmpDate(res.xmp); src = 'XMP'; }
+  if (!date){ date = parseDateStr(res.datetime); src = 'EXIF DateTime'; }
+  return { kind, date, src: date ? src : '' };
+}
+
+async function analyze(it){
+  const name = it.name;
+  if (name.startsWith('._') || name === '.DS_Store'){ it.status = 'junk'; return; }
+  if (!SUPPORTED.has(it.ext.toLowerCase())){ it.status = 'unsupported'; return; }
+  try {
+    const r = await withTimeout(readShotDate(it.file), FILE_TIMEOUT);
+    it.exif = r.date; it.src = r.src;
+    it.status = r.kind === 'unknown' ? 'badfile' : (r.date ? 'ok' : 'nodate');
+  } catch(e){
+    it.status = 'nodate'; it.exif = null;
+  }
+  // AVI動画で日時が埋め込まれていない場合は、ファイルの記録時刻を使う
+  if (it.ext.toLowerCase() === 'avi' && !it.exif && it.status !== 'badfile'){
+    const d = mtimeDate(it.file);
+    if (d){ it.exif = d; it.src = 'mtime-auto'; it.status = 'ok'; }
+  }
+}
+
+/* ---------------- 名前の決定 ---------------- */
+function effectiveDate(it){
+  if (it.exif) return { d: it.exif, src: it.src };
+  if (el.useMtime.checked && it.status === 'nodate'){
+    const d = mtimeDate(it.file);
+    if (d) return { d, src: 'mtime' };
+  }
+  return null;
+}
+function mtimeDate(file){
+  if (!file || !file.lastModified) return null;
+  const t = new Date(file.lastModified);
+  if (isNaN(t) || t.getFullYear() < 1980) return null;
+  return { y:t.getFullYear(), mo:t.getMonth()+1, d:t.getDate(), h:t.getHours(), mi:t.getMinutes(), s:t.getSeconds() };
+}
+function baseName(d){ return `${d.y}-${pad(d.mo)}-${pad(d.d)}_${pad(d.h)}${pad(d.mi)}${pad(d.s)}`; }
+function escRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+function assignNames(){
+  // フォルダごとに、変更対象ではない既存ファイル名を「使用中」として扱う
+  const used = new Map();
+  for (const d of state.dirs) used.set(d, new Set(d.names.map(n => n.toLowerCase())));
+  const groups = new Map();
+  for (const it of state.items){
+    if (it.renamed) continue;
+    it.newName = ''; it.eff = null;
+    const e = effectiveDate(it);
+    if (!e) continue;
+    it.eff = e;
+    const b = baseName(e.d);
+    used.get(it.dir).delete(it.name.toLowerCase());   // 自分の現在名は変更後に空く
+    const key = it.dir.path + '|' + b;
+    if (!groups.has(key)) groups.set(key, { b, dir: it.dir, list: [] });
+    groups.get(key).list.push(it);
+  }
+  for (const it of state.items) if (it.renamed) used.get(it.dir).add(it.name.toLowerCase());
+
+  const coll = new Intl.Collator('ja', { numeric: true, sensitivity: 'base' });
+  for (const g of groups.values()){
+    const set = used.get(g.dir);
+    const list = g.list.sort((x, y) => coll.compare(x.name, y.name) || x.idx - y.idx);
+    // すでに撮影日時の名前になっているファイルはそのまま
+    const re = new RegExp('^' + escRe(g.b) + '(_\\d{3,})?\\.[^.]+$', 'i');
+    const rest = [];
+    for (const it of list){
+      if (re.test(it.name) && !set.has(it.name.toLowerCase())){ it.newName = it.name; set.add(it.name.toLowerCase()); }
+      else rest.push(it);
+    }
+    if (!rest.length) continue;
+    const stems = new Map();
+    let dupPair = false;
+    for (const it of rest){
+      const sk = it.stem.toLowerCase();
+      if (!stems.has(sk)) stems.set(sk, []);
+      const arr = stems.get(sk);
+      if (arr.some(o => o.ext.toLowerCase() === it.ext.toLowerCase())) dupPair = true;
+      arr.push(it);
+    }
+    const numbered = stems.size > 1 || dupPair || list.length > rest.length;
+    const mk = (n, it) => (n ? `${g.b}_${pad(n, 3)}` : g.b) + (it.ext ? '.' + it.ext : '');
+    let n = numbered ? 1 : 0;
+    for (const arr of stems.values()){
+      // 同じ元ファイル名（RAW+JPEGなど）は同じ番号。拡張子まで同じものは別番号
+      const slots = [];
+      for (const it of arr){
+        let slot = slots.find(s => !s.some(o => o.ext.toLowerCase() === it.ext.toLowerCase()));
+        if (!slot){ slot = []; slots.push(slot); }
+        slot.push(it);
+      }
+      for (const slot of slots){
+        let guard = 0;
+        while (slot.some(it => set.has(mk(n, it).toLowerCase())) && guard++ < 100000) n = n + 1;
+        for (const it of slot){ it.newName = mk(n, it); set.add(it.newName.toLowerCase()); }
+        n = n + 1;
+      }
+    }
+  }
+}
+
+/* ---------------- 表示 ---------------- */
+function fmtDate(d){ return `${d.y}/${pad(d.mo)}/${pad(d.d)} ${pad(d.h)}:${pad(d.mi)}:${pad(d.s)}`; }
+function span(cls, text){ const s = document.createElement('span'); s.className = cls; s.textContent = text; return s; }
+
+function renderRow(it){
+  const [c1, c2, c3] = it.tr.children;
+  c1.textContent = it.label;
+  let skip = true, dateText = '', note = '';
+  switch (it.status){
+    case 'pending': dateText = '待機中'; break;
+    case 'reading': dateText = '読み取り中…'; break;
+    case 'junk': dateText = '—'; note = 'macOSの管理用ファイル'; break;
+    case 'unsupported': dateText = '—'; note = '対応外の形式'; break;
+    case 'badfile': dateText = '読み取り不可'; note = 'ファイル形式を判別できません'; break;
+    case 'ok': case 'nodate':
+      if (it.eff || it.renamed){
+        skip = false;
+        if (it.eff){
+          dateText = fmtDate(it.eff.d);
+          if (it.eff.src === 'mtime') note = 'ファイル更新日時を使用';
+          else if (it.eff.src === 'mtime-auto') note = '動画の記録時刻（ファイル）を使用';
+        }
+      } else { dateText = '読み取り不可'; note = '撮影日時を読み取れません'; }
+      break;
+  }
+  c2.textContent = dateText;
+  c2.className = 'date' + (/^(待機中|読み取り中…|—)$/.test(dateText) ? ' muted' : '');
+  c3.textContent = '';
+  if (it.status === 'pending' || it.status === 'reading'){ /* 空欄 */ }
+  else if (it.renamed){ c3.appendChild(span('done', '✓ ' + it.name)); c3.appendChild(span('note', '変更済み（元：' + it.oldName + '）')); }
+  else if (!skip){
+    c3.appendChild(span('ok', it.newName));
+    if (it.newName === it.name) note = '変更不要';
+    if (it.error) c3.appendChild(span('note err', it.error));
+    if (note) c3.appendChild(span('note', note));
+  }
+  else {
+    c3.appendChild(document.createTextNode('スキップ'));
+    if (note) c3.appendChild(span('note', note));
+  }
+  it.tr.className = (skip && it.status !== 'pending' && it.status !== 'reading') ? 'skip' : '';
+}
+
+function createRow(it){
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td class="name"></td><td class="date"></td><td class="new"></td>';
+  it.tr = tr;
+  renderRow(it);
+  return tr;
+}
+
+function toRename(){ return state.items.filter(i => !i.renamed && i.newName && i.newName !== i.name); }
+
+function updateSummary(){
+  const total = state.items.length;
+  const done = state.items.filter(i => i.status !== 'pending' && i.status !== 'reading').length;
+  const todo = toRename().length;
+  const renamed = state.items.filter(i => i.renamed).length;
+  const same = state.items.filter(i => !i.renamed && i.newName && i.newName === i.name).length;
+  el.summary.innerHTML = '';
+  const add = (label, n) => { el.summary.appendChild(document.createTextNode(label + '：')); const b = document.createElement('b'); b.textContent = n; el.summary.appendChild(b); el.summary.appendChild(document.createTextNode('件　')); };
+  if (state.rootName) el.summary.appendChild(document.createTextNode('フォルダ：' + state.rootName + '　'));
+  add('ファイル', total);
+  if (done === total && total > 0){
+    add('変更予定', todo);
+    if (renamed) add('変更済み', renamed);
+    if (same) add('変更不要', same);
+    add('対象外', total - todo - renamed - same);
+  }
+  el.clearBtn.disabled = state.busy || total === 0;
+  el.renameBtn.disabled = state.busy || todo === 0 || done !== total || !supported();
+  el.renameBtn.textContent = todo ? `名前を変更（${todo}件）` : '名前を変更';
+  el.undoBtn.hidden = state.busy || renamed === 0;
+  el.pickBtn.disabled = state.busy || !supported();
+  el.lastBtn.disabled = state.busy;
+  el.useMtime.disabled = state.busy;
+}
+
+function setBusy(b){
+  state.busy = b;
+  el.cancelBtn.hidden = !b;
+  el.progressBox.hidden = !b;
+  el.confirmBox.hidden = true;
+  if (!b) state.cancel = false;
+  updateSummary();
+}
+
+/* ---------------- フォルダ選択 → 解析 ---------------- */
+function supported(){
+  return typeof window.showDirectoryPicker === 'function' && typeof FileSystemFileHandle !== 'undefined' && typeof FileSystemFileHandle.prototype.move === 'function';
+}
+const SKIP_DIRS = /^(System Volume Information|\$RECYCLE\.BIN|\.Trashes|\.Spotlight-V100|\.fseventsd)$/i;
+
+async function scanDir(dirHandle, path, depth, out){
+  const dir = { handle: dirHandle, path, names: [] };
+  out.dirs.push(dir);
+  const subs = [];
+  for await (const [name, h] of dirHandle.entries()){
+    if (state.cancel) return;
+    if (h.kind === 'file'){
+      dir.names.push(name);
+      if (name.startsWith('.') || name === 'desktop.ini' || name === 'Thumbs.db') continue;
+      if (out.files.length >= MAX_FILES){ out.truncated = true; continue; }
+      out.files.push({ dir, handle: h, name });
+      if (out.files.length % 200 === 0){ setMsg(`ファイルを探しています… ${out.files.length}件`); await sleep(0); }
+    } else if (h.kind === 'directory' && depth < MAX_DEPTH && !name.startsWith('.') && !SKIP_DIRS.test(name)){
+      subs.push([name, h]);
+    }
+  }
+  subs.sort((a, b) => a[0].localeCompare(b[0], 'ja', { numeric: true }));
+  for (const [name, h] of subs) await scanDir(h, path ? path + '/' + name : name, depth + 1, out);
+}
+
+el.pickBtn.addEventListener('click', async () => {
+  if (state.busy || !supported()) return;
+  let root;
+  try { root = await window.showDirectoryPicker({ id: 'photo-renamer', mode: 'readwrite' }); }
+  catch (e){ if (e && e.name !== 'AbortError') setMsg('フォルダを開けませんでした：' + (e.message || e.name), 'err'); return; }
+  saveLastDir(root);
+  openRoot(root);
+});
+
+el.lastBtn.addEventListener('click', async () => {
+  if (state.busy) return;
+  const root = await loadLastDir();
+  if (!root){ el.lastBtn.hidden = true; return; }
+  try {
+    // SDカードを抜き差しした場合などは開けないので確認する
+    for await (const _ of root.keys()) break;
+  } catch (e){
+    setMsg('前回のフォルダが見つかりません。SDカードが挿さっているか確認し、「フォルダを選択」から選び直してください。', 'err');
+    return;
+  }
+  openRoot(root);
+});
+
+async function openRoot(root){
+  try {
+    if (root.queryPermission && (await root.queryPermission({ mode: 'readwrite' })) !== 'granted'){
+      if ((await root.requestPermission({ mode: 'readwrite' })) !== 'granted'){
+        setMsg('ファイル名を変更するには「編集を許可」が必要です。もう一度フォルダを選んでください。', 'err'); return;
+      }
+    }
+  } catch(e){}
+  state.items = []; state.dirs = []; state.rootName = root.name;
+  el.tbody.textContent = '';
+  setBusy(true);
+  const out = { dirs: [], files: [], truncated: false };
+  try { await scanDir(root, '', 0, out); }
+  catch (e){ setBusy(false); resetTable(); setMsg('フォルダを読み込めませんでした：' + (e.message || e.name), 'err'); return; }
+  state.dirs = out.dirs;
+  const coll = new Intl.Collator('ja', { numeric: true });
+  out.files.sort((a, b) => coll.compare(a.dir.path, b.dir.path) || coll.compare(a.name, b.name));
+  const frag = document.createDocumentFragment();
+  for (const f of out.files){
+    const it = { idx: state.seq++, dir: f.dir, handle: f.handle, name: f.name, file: null,
+      label: (f.dir.path ? f.dir.path + '/' : '') + f.name, ext: extOf(f.name), stem: stemOf(f.name),
+      status: 'pending', exif: null, src: '', newName: '', eff: null, renamed: false, oldName: '', error: '' };
+    state.items.push(it);
+    frag.appendChild(createRow(it));
+  }
+  el.tbody.appendChild(frag);
+  setBusy(false);
+  if (!state.items.length){ resetTable('このフォルダにはファイルが見つかりませんでした'); return; }
+  if (out.truncated) setMsg(`ファイルが多すぎるため、最初の${MAX_FILES}件だけを対象にしています。`, 'err');
+  runAnalysis();
+}
+
+/* ---------------- 前回のフォルダを記憶（このブラウザ内のみ） ---------------- */
+function idb(){
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('photo-renamer', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function saveLastDir(h){
+  try { const db = await idb(); const tx = db.transaction('kv', 'readwrite'); tx.objectStore('kv').put(h, 'lastDir'); el.lastBtn.hidden = false; } catch(e){}
+}
+async function loadLastDir(){
+  try { const db = await idb(); return await new Promise(res => { const q = db.transaction('kv').objectStore('kv').get('lastDir'); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); }
+  catch(e){ return null; }
+}
+
+async function runAnalysis(){
+  if (state.busy) return;
+  setBusy(true);
+  const todo = state.items.filter(i => i.status === 'pending');
+  el.progress.max = Math.max(1, todo.length); el.progress.value = 0;
+  let n = 0;
+  for (const it of todo){
+    if (state.cancel) break;
+    it.status = 'reading';
+    try {
+      if (SUPPORTED.has(it.ext.toLowerCase()) && !it.name.startsWith('._')) it.file = await it.handle.getFile();
+      await analyze(it);
+    } catch(e){ it.status = 'nodate'; }
+    renderRow(it);
+    n++;
+    el.progress.value = n;
+    if (n % 4 === 0){ setMsg(`撮影日時を読み取り中… ${n} / ${todo.length}`); await sleep(0); }
+  }
+  const cancelled = state.cancel;
+  if (cancelled){
+    state.items = state.items.filter(i => { if (i.status === 'pending' || i.status === 'reading'){ i.tr.remove(); return false; } return true; });
+  }
+  setBusy(false);
+  refreshNames();
+  setMsg(cancelled ? '読み取りを中止しました。' : (toRename().length ? '内容を確認して「名前を変更」を押してください。' : '変更が必要なファイルはありません。'));
+}
+
+function refreshNames(){
+  assignNames();
+  for (const it of state.items) renderRow(it);
+  updateSummary();
+}
+
+el.useMtime.addEventListener('change', () => { if (!state.busy) refreshNames(); });
+el.cancelBtn.addEventListener('click', () => { state.cancel = true; });
+
+function resetTable(text){
+  el.tbody.textContent = '';
+  const tr = document.createElement('tr'); const td = document.createElement('td');
+  td.colSpan = 3; td.className = 'empty';
+  td.textContent = text || '「フォルダを選択」から写真・動画のフォルダを選んでください';
+  tr.appendChild(td); el.tbody.appendChild(tr);
+}
+
+el.clearBtn.addEventListener('click', () => {
+  if (state.busy) return;
+  state.items = []; state.dirs = []; state.rootName = '';
+  resetTable(); setMsg(''); updateSummary();
+});
+
+/* ---------------- 名前の変更 ---------------- */
+async function nameTaken(dir, name, self){
+  const lower = name.toLowerCase();
+  // SDカードは大文字・小文字を区別しないため、小文字にそろえて確認する
+  if (dir.names.some(n => n.toLowerCase() === lower)) return true;
+  try { await dir.handle.getFileHandle(name); return true; }
+  catch (e){ if (e && e.name === 'NotFoundError') return false; if (e && e.name === 'TypeMismatchError') return true; throw e; }
+}
+
+async function renameItems(list, toOld){
+  let doneCount = 0, failed = 0;
+  let queue = list.slice();
+  el.progress.max = Math.max(1, list.length); el.progress.value = 0;
+  // 変更先が「これから名前が変わる別ファイル」の場合に備え、最大3周する
+  for (let pass = 0; pass < 3 && queue.length && !state.cancel; pass++){
+    const deferred = [];
+    for (const it of queue){
+      if (state.cancel) break;
+      const target = toOld ? it.oldName : it.newName;
+      try {
+        if (await nameTaken(it.dir, target, it)){ deferred.push(it); continue; }
+        const before = it.name;
+        await it.handle.move(target);
+        const i = it.dir.names.indexOf(before);
+        if (i >= 0) it.dir.names[i] = target; else it.dir.names.push(target);
+        if (toOld){ it.renamed = false; it.name = target; it.oldName = ''; }
+        else { it.renamed = true; it.oldName = before; it.name = target; }
+        it.error = '';
+        doneCount++;
+      } catch (e){
+        it.error = '変更できませんでした（' + ((e && e.name) || 'エラー') + '）';
+        failed++;
+      }
+      renderRow(it);
+      el.progress.value = doneCount + failed;
+      if ((doneCount + failed) % 8 === 0){
+        setMsg(`${toOld ? '元に戻しています' : '名前を変更しています'}… ${doneCount + failed} / ${list.length}`);
+        await sleep(0);
+      }
+    }
+    if (state.cancel) { queue = []; break; }
+    queue = deferred;
+  }
+  for (const it of queue){ it.error = '同じ名前のファイルがあるため変更しませんでした'; failed++; renderRow(it); }
+  return { doneCount, failed };
+}
+
+el.renameBtn.addEventListener('click', () => {
+  if (state.busy) return;
+  const n = toRename().length;
+  if (!n) return;
+  el.confirmText.textContent = `${n}件のファイル名を変更します。よろしいですか？`;
+  el.confirmBox.hidden = false;
+});
+el.noBtn.addEventListener('click', () => { el.confirmBox.hidden = true; });
+
+el.yesBtn.addEventListener('click', async () => {
+  if (state.busy) return;
+  const list = toRename();
+  setBusy(true);
+  let r;
+  try { r = await renameItems(list, false); }
+  catch (e){ r = { doneCount: 0, failed: list.length }; }
+  const cancelled = state.cancel;
+  setBusy(false);
+  for (const it of state.items) renderRow(it);
+  updateSummary();
+  let m = cancelled ? `中止しました（${r.doneCount}件は変更済み）。` : `${r.doneCount}件の名前を変更しました。`;
+  if (r.failed) m += ` ${r.failed}件は変更できませんでした（一覧の赤字を確認してください）。`;
+  if (r.doneCount) m += ' 取り消す場合は「元に戻す」を押してください。';
+  setMsg(m, r.failed ? 'err' : 'ok');
+});
+
+el.undoBtn.addEventListener('click', async () => {
+  if (state.busy) return;
+  const list = state.items.filter(i => i.renamed).reverse();
+  if (!list.length) return;
+  setBusy(true);
+  let r;
+  try { r = await renameItems(list, true); }
+  catch (e){ r = { doneCount: 0, failed: list.length }; }
+  setBusy(false);
+  refreshNames();
+  setMsg(`${r.doneCount}件を元の名前に戻しました。` + (r.failed ? ` ${r.failed}件は戻せませんでした。` : ''), r.failed ? 'err' : 'ok');
+});
+
+window.addEventListener('beforeunload', e => { if (state.busy){ e.preventDefault(); e.returnValue = ''; } });
+
+state.dirs = []; state.rootName = '';
+if (!supported()) el.unsupported.hidden = false;
+else loadLastDir().then(h => { if (h) el.lastBtn.hidden = false; });
+
+/* ---------------- PWA ---------------- */
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)){
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+let installPrompt = null;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; el.installBtn.hidden = false; });
+el.installBtn.addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  try { await installPrompt.userChoice; } catch(e){}
+  installPrompt = null; el.installBtn.hidden = true;
+});
+window.addEventListener('appinstalled', () => { el.installBtn.hidden = true; });
+updateSummary();
+})();
+</script>
+</body>
+</html>

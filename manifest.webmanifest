@@ -1,0 +1,17 @@
+{
+  "name": "撮影日時リネーマー",
+  "short_name": "撮影日時リネーマー",
+  "description": "写真・動画のファイル名を撮影日時に変更します",
+  "lang": "ja",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f6f3",
+  "theme_color": "#1f6feb",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
