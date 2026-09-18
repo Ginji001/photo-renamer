@@ -66,6 +66,8 @@ button.danger{background:var(--err);border-color:var(--err);color:#fff}
 .note.copied{color:var(--ok)}
 button.danger-outline{border-color:var(--err);color:var(--err)}
 tr.deleted td{opacity:.55}
+th.sel,td.sel{width:34px;padding-right:0}
+td.sel input{width:16px;height:16px}
 .after{margin-top:12px;padding:12px 14px;border-radius:10px;background:var(--row-skip);font-size:14px;line-height:1.8}
 </style>
 </head>
@@ -84,7 +86,8 @@ tr.deleted td{opacity:.55}
     </div>
     <div class="help">SDカードの「DCIM」フォルダ（または「100MEDIA」など）を選んでください。中のフォルダも対象になります。SDカードはFinderの左側「場所」から開けます。<br>
     フォルダを選ぶと「ファイルの編集を許可しますか？」と表示されるので「編集を許可」を押してください。<br>
-    「別のドライブにコピー」では、変更後の名前で外付けHDなどにコピーします（上書きはしません）。</div>
+    「別のドライブにコピー」では、チェックを入れたファイルだけを、変更後の名前で外付けHDなどにコピーします（上書きはしません）。<br>
+    左のチェックで選び、見出しのチェックで全選択／全解除、Shiftキーを押しながらのクリックで範囲をまとめて選べます。</div>
     <div class="msg err" id="unsupported" hidden>このブラウザはファイル名の変更に対応していません。Google Chrome で開いてください。<br>（Braveの場合：アドレス欄に brave://flags と入力 →「File System Access API」を検索 → Enabled にして再起動）</div>
     <div class="summary" id="summary">選択：<b>0</b>枚</div>
     <div class="progress" id="progressBox" hidden><progress id="progress" value="0" max="1"></progress></div>
@@ -94,8 +97,8 @@ tr.deleted td{opacity:.55}
 
   <div class="table-wrap">
     <table>
-      <thead><tr><th style="width:30%">元ファイル</th><th style="width:22%">撮影日時</th><th>変更後</th></tr></thead>
-      <tbody id="tbody"><tr><td colspan="3" class="empty">「フォルダを選択」から写真・動画のフォルダを選んでください</td></tr></tbody>
+      <thead><tr><th class="sel"><input type="checkbox" id="checkAll" checked title="すべて選択／解除"></th><th style="width:28%">元ファイル</th><th style="width:20%">撮影日時</th><th>変更後</th></tr></thead>
+      <tbody id="tbody"><tr><td colspan="4" class="empty">「フォルダを選択」から写真・動画のフォルダを選んでください</td></tr></tbody>
     </table>
   </div>
 </main>
@@ -132,7 +135,7 @@ const $ = id => document.getElementById(id);
 const el = { pickBtn:$('pickBtn'), useMtime:$('useMtime'), summary:$('summary'), unsupported:$('unsupported'),
   progressBox:$('progressBox'), progress:$('progress'), msg:$('msg'), tbody:$('tbody'),
   cancelBtn:$('cancelBtn'), lastBtn:$('lastBtn'), installBtn:$('installBtn'), clearBtn:$('clearBtn'), renameBtn:$('renameBtn'), undoBtn:$('undoBtn'),
-  copyBtn:$('copyBtn'), deleteBtn:$('deleteBtn'), after:$('after'), byDate:$('byDate'), confirmBox:$('confirmBox'), confirmText:$('confirmText'), yesBtn:$('yesBtn'), noBtn:$('noBtn') };
+  copyBtn:$('copyBtn'), checkAll:$('checkAll'), deleteBtn:$('deleteBtn'), after:$('after'), byDate:$('byDate'), confirmBox:$('confirmBox'), confirmText:$('confirmText'), yesBtn:$('yesBtn'), noBtn:$('noBtn') };
 
 /* ドラッグ＆ドロップは使わない（誤ってドロップしてもページが切り替わらないように無効化） */
 ['dragover','drop'].forEach(t => window.addEventListener(t, e => { e.preventDefault(); if (t === 'drop') setMsg('ドラッグ＆ドロップには対応していません。「フォルダを選択」を使ってください。'); }));
@@ -563,7 +566,11 @@ function fmtDate(d){ return `${d.y}/${pad(d.mo)}/${pad(d.d)} ${pad(d.h)}:${pad(d
 function span(cls, text){ const s = document.createElement('span'); s.className = cls; s.textContent = text; return s; }
 
 function renderRow(it){
-  const [c1, c2, c3] = it.tr.children;
+  const [c0, c1, c2, c3] = it.tr.children;
+  const box = c0.firstChild;
+  const selectable = !!it.newName && !it.deleted;
+  box.hidden = !selectable;
+  box.checked = selectable && it.sel !== false;
   c1.textContent = it.label;
   let skip = true, dateText = '', note = '';
   switch (it.status){
@@ -606,16 +613,19 @@ function renderRow(it){
 
 function createRow(it){
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td class="name"></td><td class="date"></td><td class="new"></td>';
+  tr.innerHTML = '<td class="sel"><input type="checkbox"></td><td class="name"></td><td class="date"></td><td class="new"></td>';
   it.tr = tr;
   renderRow(it);
   return tr;
 }
 
-function toCopy(){ return state.items.filter(i => i.newName && !i.deleted); }
+function copyable(){ return state.items.filter(i => i.newName && !i.deleted); }
+function toCopy(){ return copyable().filter(i => i.sel !== false); }
 function toRename(){ return state.items.filter(i => !i.deleted && !i.renamed && i.newName && i.newName !== i.name); }
 function toDelete(){ return state.items.filter(i => !i.deleted && i.copyOk && i.copyDir && i.copyName); }
 
+function nSelectableCount(){ return copyable().length; }
+function nSelectedCount(){ return toCopy().length; }
 function updateSummary(){
   const total = state.items.length;
   const done = state.items.filter(i => i.status !== 'pending' && i.status !== 'reading').length;
@@ -629,6 +639,7 @@ function updateSummary(){
   add('ファイル', total);
   if (done === total && total > 0){
     add('変更予定', todo);
+    if (nSelectableCount() && nSelectedCount() !== nSelectableCount()) add('コピー選択', nSelectedCount());
     if (deleted) add('削除済み', deleted);
     if (renamed) add('変更済み', state.items.filter(i => i.renamed && !i.deleted).length);
     if (same) add('変更不要', same);
@@ -639,6 +650,10 @@ function updateSummary(){
   el.renameBtn.textContent = todo ? `名前を変更（${todo}件）` : '名前を変更';
   el.undoBtn.hidden = state.busy || state.items.filter(i => i.renamed && !i.deleted).length === 0;
   const nCopy = toCopy().length;
+  const nSelectable = copyable().length;
+  el.checkAll.disabled = state.busy || nSelectable === 0;
+  el.checkAll.checked = nSelectable > 0 && nCopy === nSelectable;
+  el.checkAll.indeterminate = nCopy > 0 && nCopy < nSelectable;
   el.copyBtn.disabled = state.busy || nCopy === 0 || done !== total;
   const nDel = toDelete().length;
   el.deleteBtn.hidden = nDel === 0;
@@ -791,12 +806,41 @@ function refreshNames(){
 }
 
 el.useMtime.addEventListener('change', () => { if (!state.busy) refreshNames(); });
+
+/* ---------------- コピーするファイルの選択 ---------------- */
+el.checkAll.addEventListener('change', () => {
+  if (state.busy) return;
+  const on = el.checkAll.checked;
+  for (const it of copyable()) it.sel = on;
+  for (const it of state.items) renderRow(it);
+  updateSummary();
+});
+
+el.tbody.addEventListener('click', e => {
+  const box = e.target;
+  if (!box || box.tagName !== 'INPUT' || box.type !== 'checkbox') return;
+  if (state.busy){ e.preventDefault(); return; }
+  const tr = box.closest('tr');
+  const list = state.items.filter(i => i.tr);
+  const idx = list.findIndex(i => i.tr === tr);
+  const it = list[idx];
+  if (!it || !it.newName || it.deleted){ e.preventDefault(); return; }
+  it.sel = box.checked;
+  // Shiftを押しながらで範囲選択
+  if (e.shiftKey && state.lastSel >= 0 && state.lastSel < list.length){
+    const [a, b] = [Math.min(idx, state.lastSel), Math.max(idx, state.lastSel)];
+    for (let i = a; i <= b; i++){ const o = list[i]; if (o.newName && !o.deleted) o.sel = box.checked; }
+    for (const o of list) renderRow(o);
+  }
+  state.lastSel = idx;
+  updateSummary();
+});
 el.cancelBtn.addEventListener('click', () => { state.cancel = true; });
 
 function resetTable(text){
   el.tbody.textContent = '';
   const tr = document.createElement('tr'); const td = document.createElement('td');
-  td.colSpan = 3; td.className = 'empty';
+  td.colSpan = 4; td.className = 'empty';
   td.textContent = text || '「フォルダを選択」から写真・動画のフォルダを選んでください';
   tr.appendChild(td); el.tbody.appendChild(tr);
 }

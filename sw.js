@@ -1,6 +1,6 @@
 // 撮影日時リネーマー service worker：アプリ本体だけをキャッシュし、オフラインでも起動できるようにする
 // 写真・動画はキャッシュも送信もしない
-const VERSION = 'v3';
+const VERSION = 'v4';
 const CACHE = 'photo-renamer-' + VERSION;
 const ASSETS = ['./', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/icon-180.png'];
