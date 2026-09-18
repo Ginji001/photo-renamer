@@ -87,8 +87,9 @@ td.sel input{width:16px;height:16px}
     <div class="help">SDカードの「DCIM」フォルダ（または「100MEDIA」など）を選んでください。中のフォルダも対象になります。SDカードはFinderの左側「場所」から開けます。<br>
     フォルダを選ぶと「ファイルの編集を許可しますか？」と表示されるので「編集を許可」を押してください。<br>
     「別のドライブにコピー」では、チェックを入れたファイルだけを、変更後の名前で外付けHDなどにコピーします（上書きはしません）。<br>
-    左のチェックで選び、見出しのチェックで全選択／全解除、Shiftキーを押しながらのクリックで範囲をまとめて選べます。</div>
-    <div class="msg err" id="unsupported" hidden>このブラウザはファイル名の変更に対応していません。Google Chrome で開いてください。<br>（Braveの場合：アドレス欄に brave://flags と入力 →「File System Access API」を検索 → Enabled にして再起動）</div>
+    左のチェックで選び、見出しのチェックで全選択／全解除、Shiftキーを押しながらのクリックで範囲をまとめて選べます。<br>
+    「選択したファイルを削除」は、チェックしたファイルをSDカードから消します。コピー済みのものは、消す前にコピー先と中身を照合します。</div>
+    <div class="msg err" id="unsupported" hidden>このブラウザはファイル名の変更に対応していません。Google Chrome で開いてください。<br>（Brave など一部のブラウザでは、この機能が初期設定で使えません）</div>
     <div class="summary" id="summary">選択：<b>0</b>枚</div>
     <div class="progress" id="progressBox" hidden><progress id="progress" value="0" max="1"></progress></div>
     <div class="msg" id="msg"></div>
@@ -127,6 +128,8 @@ const READ_LIMIT = 3000;          // 1ファイルあたりの読み取り回数
 const FILE_TIMEOUT = 20000;       // 1ファイルの解析タイムアウト(ms)
 const MAX_FILES = 20000;          // 1回で扱うファイル数の上限
 const MAX_DEPTH = 4;              // サブフォルダをたどる深さ
+const COPY_PARALLEL = 4;          // コピーを同時に進める数
+const VERIFY_PARALLEL = 3;        // 照合を同時に進める数
 const HEAD_SIZE = 256 * 1024;
 
 /* ---------------- 状態 ---------------- */
@@ -145,6 +148,19 @@ window.addEventListener('unhandledrejection', e => { setMsg('エラーが発生�
 
 /* ---------------- ユーティリティ ---------------- */
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+// 複数の処理を同時に進める（中止が押されたら新しい処理は始めない）
+async function runPool(items, limit, worker){
+  let next = 0;
+  const n = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: n }, async () => {
+    for (;;){
+      if (state.cancel) return;
+      const i = next++;
+      if (i >= items.length) return;
+      try { await worker(items[i], i); } catch (e){ /* 個別のエラーは worker 側で記録 */ }
+    }
+  }));
+}
 function extOf(n){ const i = n.lastIndexOf('.'); return i > 0 ? n.slice(i + 1) : ''; }
 function stemOf(n){ const i = n.lastIndexOf('.'); return i > 0 ? n.slice(0, i) : n; }
 function pad(n, w){ return String(n).padStart(w || 2, '0'); }
@@ -568,7 +584,7 @@ function span(cls, text){ const s = document.createElement('span'); s.className 
 function renderRow(it){
   const [c0, c1, c2, c3] = it.tr.children;
   const box = c0.firstChild;
-  const selectable = !!it.newName && !it.deleted;
+  const selectable = !it.deleted && it.status !== 'pending' && it.status !== 'reading';
   box.hidden = !selectable;
   box.checked = selectable && it.sel !== false;
   c1.textContent = it.label;
@@ -594,7 +610,7 @@ function renderRow(it){
   c2.className = 'date' + (/^(待機中|読み取り中…|—)$/.test(dateText) ? ' muted' : '');
   c3.textContent = '';
   if (it.status === 'pending' || it.status === 'reading'){ /* 空欄 */ }
-  else if (it.deleted){ c3.appendChild(span('done', '削除済み')); c3.appendChild(span('note copied', 'コピー先で照合済み：' + it.copyPath)); it.tr.className = 'deleted'; return; }
+  else if (it.deleted){ c3.appendChild(span('done', '削除済み')); c3.appendChild(span(it.copyPath ? 'note copied' : 'note', it.copyPath ? 'コピー先で照合済み：' + it.copyPath : 'コピーせずに削除')); it.tr.className = 'deleted'; return; }
   else if (it.renamed){ c3.appendChild(span('done', '✓ ' + it.name)); c3.appendChild(span('note', '変更済み（元：' + it.oldName + '）')); }
   else if (!skip){
     c3.appendChild(span('ok', it.newName));
@@ -622,10 +638,12 @@ function createRow(it){
 function copyable(){ return state.items.filter(i => i.newName && !i.deleted); }
 function toCopy(){ return copyable().filter(i => i.sel !== false); }
 function toRename(){ return state.items.filter(i => !i.deleted && !i.renamed && i.newName && i.newName !== i.name); }
-function toDelete(){ return state.items.filter(i => !i.deleted && i.copyOk && i.copyDir && i.copyName); }
+function selectable(){ return state.items.filter(i => !i.deleted && i.status !== 'pending' && i.status !== 'reading'); }
+function toDelete(){ return selectable().filter(i => i.sel !== false); }
+function verified(it){ return !!(it.copyOk && it.copyDir && it.copyName); }
 
-function nSelectableCount(){ return copyable().length; }
-function nSelectedCount(){ return toCopy().length; }
+function nSelectableCount(){ return selectable().length; }
+function nSelectedCount(){ return toDelete().length; }
 function updateSummary(){
   const total = state.items.length;
   const done = state.items.filter(i => i.status !== 'pending' && i.status !== 'reading').length;
@@ -639,7 +657,7 @@ function updateSummary(){
   add('ファイル', total);
   if (done === total && total > 0){
     add('変更予定', todo);
-    if (nSelectableCount() && nSelectedCount() !== nSelectableCount()) add('コピー選択', nSelectedCount());
+    if (nSelectableCount() && nSelectedCount() !== nSelectableCount()) add('選択中', nSelectedCount());
     if (deleted) add('削除済み', deleted);
     if (renamed) add('変更済み', state.items.filter(i => i.renamed && !i.deleted).length);
     if (same) add('変更不要', same);
@@ -650,15 +668,18 @@ function updateSummary(){
   el.renameBtn.textContent = todo ? `名前を変更（${todo}件）` : '名前を変更';
   el.undoBtn.hidden = state.busy || state.items.filter(i => i.renamed && !i.deleted).length === 0;
   const nCopy = toCopy().length;
-  const nSelectable = copyable().length;
+  const nSelectable = selectable().length;
+  const nSel = toDelete().length;
   el.checkAll.disabled = state.busy || nSelectable === 0;
-  el.checkAll.checked = nSelectable > 0 && nCopy === nSelectable;
-  el.checkAll.indeterminate = nCopy > 0 && nCopy < nSelectable;
+  el.checkAll.checked = nSelectable > 0 && nSel === nSelectable;
+  el.checkAll.indeterminate = nSel > 0 && nSel < nSelectable;
   el.copyBtn.disabled = state.busy || nCopy === 0 || done !== total;
   const nDel = toDelete().length;
-  el.deleteBtn.hidden = nDel === 0;
-  el.deleteBtn.disabled = state.busy;
-  el.deleteBtn.textContent = `SDカードから削除（${nDel}件）`;
+  el.deleteBtn.hidden = false;
+  el.deleteBtn.disabled = state.busy || nDel === 0 || done !== total;
+  const nRaw = toDelete().filter(i => !verified(i)).length;
+  el.deleteBtn.textContent = nRaw ? `選択したファイルを削除（${nDel}件・未コピー${nRaw}件を含む）` : `選択したファイルを削除（${nDel}件）`;
+  el.deleteBtn.classList.toggle('danger', nRaw > 0);
   el.copyBtn.textContent = nCopy ? `別のドライブにコピー（${nCopy}件）` : '別のドライブにコピー';
   el.byDate.disabled = state.busy;
   el.pickBtn.disabled = state.busy || !supported();
@@ -811,7 +832,7 @@ el.useMtime.addEventListener('change', () => { if (!state.busy) refreshNames(); 
 el.checkAll.addEventListener('change', () => {
   if (state.busy) return;
   const on = el.checkAll.checked;
-  for (const it of copyable()) it.sel = on;
+  for (const it of selectable()) it.sel = on;
   for (const it of state.items) renderRow(it);
   updateSummary();
 });
@@ -824,12 +845,12 @@ el.tbody.addEventListener('click', e => {
   const list = state.items.filter(i => i.tr);
   const idx = list.findIndex(i => i.tr === tr);
   const it = list[idx];
-  if (!it || !it.newName || it.deleted){ e.preventDefault(); return; }
+  if (!it || it.deleted || it.status === 'pending' || it.status === 'reading'){ e.preventDefault(); return; }
   it.sel = box.checked;
   // Shiftを押しながらで範囲選択
   if (e.shiftKey && state.lastSel >= 0 && state.lastSel < list.length){
     const [a, b] = [Math.min(idx, state.lastSel), Math.max(idx, state.lastSel)];
-    for (let i = a; i <= b; i++){ const o = list[i]; if (o.newName && !o.deleted) o.sel = box.checked; }
+    for (let i = a; i <= b; i++){ const o = list[i]; if (!o.deleted && o.status !== 'pending' && o.status !== 'reading') o.sel = box.checked; }
     for (const o of list) renderRow(o);
   }
   state.lastSel = idx;
@@ -979,21 +1000,30 @@ el.deleteBtn.addEventListener('click', () => {
   const n = toDelete().length;
   if (!n) return;
   state.pending = 'delete';
-  el.confirmText.textContent = `コピーを確認できた${n}件をSDカードから削除します。削除する前に、コピー先のファイルと中身を1件ずつ照合します（ゴミ箱には入りません）。`;
-  el.yesBtn.textContent = '照合して削除';
+  const list = toDelete();
+  const okCount = list.filter(verified).length;
+  const rawCount = list.length - okCount;
+  let t = `選択した${n}件をSDカードから削除します（ゴミ箱には入りません）。`;
+  if (okCount) t += ` うち${okCount}件はコピー済みで、削除前にコピー先と中身を照合します。`;
+  if (rawCount) t += ` ${rawCount}件はこのアプリでコピーしていないファイルです。削除すると元に戻せません。`;
+  el.confirmText.textContent = t;
+  el.yesBtn.textContent = '削除する';
   el.confirmBox.hidden = false;
 });
 
 async function sameContent(a, b, onBytes){
   if (a.size !== b.size) return false;
-  const CH = 8 * 1024 * 1024;
+  const CH = 16 * 1024 * 1024;
   for (let off = 0; off < a.size; off += CH){
     if (state.cancel) throw Object.assign(new Error('cancel'), { name: 'AbortError' });
     const end = Math.min(a.size, off + CH);
     const [x, y] = await Promise.all([a.slice(off, end).arrayBuffer(), b.slice(off, end).arrayBuffer()]);
-    const ua = new Uint8Array(x), ub = new Uint8Array(y);
-    if (ua.length !== ub.length) return false;
-    for (let i = 0; i < ua.length; i++) if (ua[i] !== ub[i]) return false;
+    if (x.byteLength !== y.byteLength) return false;
+    const n32 = x.byteLength >> 2;
+    const ax = new Uint32Array(x, 0, n32), bx = new Uint32Array(y, 0, n32);
+    for (let i = 0; i < n32; i++) if (ax[i] !== bx[i]) return false;
+    const ar = new Uint8Array(x), br = new Uint8Array(y);
+    for (let i = n32 << 2; i < ar.length; i++) if (ar[i] !== br[i]) return false;
     onBytes(end - off);
     await sleep(0);
   }
@@ -1006,46 +1036,58 @@ async function runDelete(){
   const list = toDelete();
   setBusy(true);
   el.after.hidden = true;
+  setMsg('削除の準備をしています…');
   let total = 0;
-  for (const it of list){ try { total += (await it.handle.getFile()).size; } catch(e){} }
+  for (const it of list){ if (!verified(it)) continue; try { total += (await it.handle.getFile()).size; } catch(e){} }
   el.progress.max = Math.max(1, total); el.progress.value = 0;
-  let doneBytes = 0, deleted = 0, mismatch = 0, failed = 0, cancelled = false;
-  const touched = new Set();
-  for (let i = 0; i < list.length; i++){
-    const it = list[i];
-    if (state.cancel){ cancelled = true; break; }
-    setMsg(`照合して削除しています… ${i + 1} / ${list.length}（${fmtSize(doneBytes)} / ${fmtSize(total)}）`);
+  let doneBytes = 0, doneFiles = 0, deleted = 0, mismatch = 0, failed = 0;
+  const t0 = Date.now();
+  const tick = () => {
+    const sec = (Date.now() - t0) / 1000;
+    const rate = total && sec > 1 ? `　照合 ${fmtSize(doneBytes / sec)}/秒` : '';
+    setMsg(`削除しています… ${doneFiles} / ${list.length}` + (total ? `（照合 ${fmtSize(doneBytes)} / ${fmtSize(total)}）${rate}` : ''));
+  };
+  // 照合しながら削除。複数を同時に進めて速くする
+  await runPool(list, VERIFY_PARALLEL, async it => {
     it.delError = '';
-    let src;
-    try {
-      src = await it.handle.getFile();
-      const dst = await (await it.copyDir.getFileHandle(it.copyName)).getFile();
-      const ok = await sameContent(src, dst, n => { doneBytes += n; el.progress.value = doneBytes; });
-      if (!ok){ mismatch++; it.copyOk = false; it.copyNote = ''; it.delError = 'コピー先と中身が一致しないため削除しませんでした'; renderRow(it); continue; }
-    } catch (e){
-      if (e && e.name === 'AbortError'){ cancelled = true; break; }
-      failed++; it.copyOk = false; it.copyNote = '';
-      it.delError = 'コピー先を確認できないため削除しませんでした（' + ((e && e.name) || 'エラー') + '）';
-      renderRow(it); continue;
+    if (verified(it)){
+      try {
+        const src = await it.handle.getFile();
+        const dst = await (await it.copyDir.getFileHandle(it.copyName)).getFile();
+        const ok = await sameContent(src, dst, n => { doneBytes += n; el.progress.value = doneBytes; tick(); });
+        if (!ok){ mismatch++; it.copyOk = false; it.copyNote = ''; it.delError = 'コピー先と中身が一致しないため削除しませんでした'; doneFiles++; renderRow(it); return; }
+      } catch (e){
+        if (!(e && e.name === 'AbortError')){
+          failed++; it.copyOk = false; it.copyNote = '';
+          it.delError = 'コピー先を確認できないため削除しませんでした（' + ((e && e.name) || 'エラー') + '）';
+          renderRow(it);
+        }
+        doneFiles++;
+        return;
+      }
     }
+    if (state.cancel){ doneFiles++; return; }
     try {
       await it.dir.handle.removeEntry(it.name);
       try { await it.dir.handle.removeEntry('._' + it.name); } catch(_){}   // Macが作る付属ファイル
       const k = it.dir.names.indexOf(it.name); if (k >= 0) it.dir.names.splice(k, 1);
-      it.deleted = true; deleted++; touched.add(it.dir);
+      it.deleted = true; it.sel = false; deleted++;
+      if (!it.copyPath) it.copyPath = '';
     } catch (e){
       failed++;
       it.delError = '削除できませんでした（' + ((e && e.name) || 'エラー') + '）' + (e && e.name === 'NoModificationAllowedError' ? '：カメラで保護されている可能性があります' : '');
     }
+    doneFiles++;
     renderRow(it);
-  }
+    tick();
+  });
+  const cancelled = state.cancel;
   // Macが作る管理ファイル（.DS_Store や ._ で始まるファイル）を片付ける
-  let junk = 0;
   for (const d of state.dirs){
     try {
       const names = [];
       for await (const [name, h] of d.handle.entries()) if (h.kind === 'file' && (name === '.DS_Store' || name.startsWith('._'))) names.push(name);
-      for (const n of names){ try { await d.handle.removeEntry(n); junk++; } catch(_){} }
+      for (const n of names){ try { await d.handle.removeEntry(n); } catch(_){} }
     } catch(_){}
   }
   setBusy(false);
@@ -1061,17 +1103,14 @@ async function runDelete(){
     'カメラで録画を再開する前に：',
     '① Finderのサイドバーで SDカードの「⏏（取り出し）」を押してから抜いてください（そのまま抜くとカードが傷むことがあります）。',
     '② カメラに挿したら、できればカメラの「フォーマット」を1回行ってください。カードの状態が録画に最適になります（コピーは済んでいます）。',
-    remain ? `※ SDカードには、まだ${remain}件のファイルが残っています（対象外・未コピーのもの）。フォーマットすると消えます。` : '※ 対象のファイルはすべて削除しました。'
+    remain ? `※ SDカードには、まだ${remain}件のファイルが残っています。フォーマットすると消えます。` : '※ 選んだファイルはすべて削除しました。'
   ];
   for (const l of lines){ const d = document.createElement('div'); d.textContent = l; el.after.appendChild(d); }
   el.after.hidden = deleted === 0;
 }
 
-async function copyOne(it, destRoot, byDate){
-  let dir = destRoot;
-  if (byDate && it.eff){ const d = it.eff.d; dir = await destRoot.getDirectoryHandle(`${d.y}-${pad(d.mo)}-${pad(d.d)}`, { create: true }); }
+async function copyOne(it, dir, src){
   const name = it.newName;
-  const src = await it.handle.getFile();
   let existing = null;
   try { existing = await (await dir.getFileHandle(name)).getFile(); }
   catch (e){ if (!e || e.name !== 'NotFoundError') throw e; }
@@ -1104,18 +1143,40 @@ async function runCopy(){
   const list = toCopy().sort((a, b) => a.newName.localeCompare(b.newName));
   const byDate = el.byDate.checked;
   setBusy(true);
-  const sizes = [];
-  for (const it of list){ try { sizes.push((await it.handle.getFile()).size); } catch(e){ sizes.push(0); } }
-  const totalBytes = sizes.reduce((a, b) => a + b, 0);
+  setMsg('コピーの準備をしています…');
+  // ファイル情報は1回だけ取得して使い回す
+  const srcs = new Map();
+  let totalBytes = 0;
+  for (const it of list){
+    try { const f = await it.handle.getFile(); srcs.set(it, f); totalBytes += f.size; } catch(e){ srcs.set(it, null); }
+  }
+  // 日付フォルダは先に作っておく（同時に作ろうとしないように）
+  const dirs = new Map();
+  for (const it of list){
+    let key = '';
+    if (byDate && it.eff){ const d = it.eff.d; key = `${d.y}-${pad(d.mo)}-${pad(d.d)}`; }
+    if (!dirs.has(key)){
+      try { dirs.set(key, key ? await dest.getDirectoryHandle(key, { create: true }) : dest); }
+      catch (e){ dirs.set(key, null); }
+    }
+  }
+  const dirOf = it => dirs.get(byDate && it.eff ? `${it.eff.d.y}-${pad(it.eff.d.mo)}-${pad(it.eff.d.d)}` : '') || dest;
   el.progress.max = Math.max(1, totalBytes); el.progress.value = 0;
-  let doneBytes = 0, copied = 0, exists = 0, conflict = 0, failed = 0, stopped = '';
-  for (let i = 0; i < list.length; i++){
-    const it = list[i];
-    if (state.cancel){ stopped = 'cancel'; break; }
-    setMsg(`コピー中… ${i + 1} / ${list.length}（${fmtSize(doneBytes)} / ${fmtSize(totalBytes)}）`);
+  let doneBytes = 0, doneFiles = 0, copied = 0, exists = 0, conflict = 0, failed = 0, stopped = '';
+  const t0 = Date.now();
+  const tick = () => {
+    const sec = (Date.now() - t0) / 1000;
+    const rate = sec > 1 ? `　${fmtSize(doneBytes / sec)}/秒` : '';
+    setMsg(`コピー中… ${doneFiles} / ${list.length}（${fmtSize(doneBytes)} / ${fmtSize(totalBytes)}）${rate}`);
+  };
+  // 複数を同時にコピーすると速くなる
+  await runPool(list, COPY_PARALLEL, async it => {
+    if (stopped) return;
+    const src = srcs.get(it);
     try {
-      const r = await copyOne(it, dest, byDate);
-      const where = dest.name + '/' + (dir => dir === dest ? '' : dir.name + '/')(it.copyDir || dest) + (it.copyName || '');
+      if (!src) throw new Error('読み込めません');
+      const r = await copyOne(it, dirOf(it), src);
+      const where = dest.name + '/' + (it.copyDir && it.copyDir !== dest ? it.copyDir.name + '/' : '') + (it.copyName || '');
       if (r === 'copied'){ copied++; it.copyOk = true; it.copyNote = 'コピー済み'; it.copyPath = where; }
       else if (r === 'exists'){ exists++; it.copyOk = true; it.copyNote = 'コピー先に同じファイルあり（スキップ）'; it.copyPath = where; }
       else { conflict++; it.copyOk = false; it.copyDir = null; it.copyNote = 'コピー先に同じ名前の別ファイルあり（上書きしません）'; }
@@ -1123,20 +1184,23 @@ async function runCopy(){
       failed++; it.copyOk = false; it.copyDir = null;
       const n = (e && e.name) || '';
       it.copyNote = 'コピーできませんでした（' + (n || (e && e.message) || 'エラー') + '）';
-      if (n === 'QuotaExceededError'){ stopped = 'full'; renderRow(it); break; }
-      if (n === 'NotFoundError' || n === 'NotReadableError'){
-        // コピー先ドライブが外れた場合などは続けない
-        try { for await (const _ of dest.keys()) break; } catch(_){ stopped = 'dest'; renderRow(it); break; }
+      if (n === 'QuotaExceededError') stopped = 'full';
+      else if (n === 'NotFoundError' || n === 'NotReadableError'){
+        try { for await (const _ of dest.keys()) break; } catch(_){ stopped = 'dest'; }
       }
     }
-    doneBytes += sizes[i];
+    doneFiles++;
+    doneBytes += src ? src.size : 0;
     el.progress.value = doneBytes;
     renderRow(it);
-    await sleep(0);
-  }
+    tick();
+  });
+  if (state.cancel) stopped = stopped || 'cancel';
   setBusy(false);
   updateSummary();
-  let m = `「${dest.name}」に${copied}件コピーしました。`;
+  const sec = Math.max(1, Math.round((Date.now() - t0) / 1000));
+  let m = `「${dest.name}」に${copied}件コピーしました`;
+  m += copied ? `（${fmtSize(doneBytes)}・${sec}秒）。` : '。';
   if (exists) m += ` ${exists}件はコピー済みのためスキップしました。`;
   if (conflict) m += ` ${conflict}件は同じ名前の別ファイルがあるためコピーしませんでした。`;
   if (failed) m += ` ${failed}件はコピーできませんでした。`;
