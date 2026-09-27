@@ -513,7 +513,8 @@ function mtimeDate(file){
   if (isNaN(t) || t.getFullYear() < 1980) return null;
   return { y:t.getFullYear(), mo:t.getMonth()+1, d:t.getDate(), h:t.getHours(), mi:t.getMinutes(), s:t.getSeconds() };
 }
-function baseName(d){ return `${d.y}-${pad(d.mo)}-${pad(d.d)}_${pad(d.h)}${pad(d.mi)}${pad(d.s)}`; }
+// 例：2026年09月17日_15時11分24秒（すべてゼロ埋めなので名前順＝撮影日時順。旧形式 2026-09-17_151124 は新形式に付け直す）
+function baseName(d){ return `${d.y}年${pad(d.mo)}月${pad(d.d)}日_${pad(d.h)}時${pad(d.mi)}分${pad(d.s)}秒`; }
 function escRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 function assignNames(){
