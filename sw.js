@@ -1,6 +1,6 @@
 // 撮影日時リネーマー service worker：アプリ本体だけをキャッシュし、オフラインでも起動できるようにする
 // 写真・動画はキャッシュも送信もしない
-const VERSION = 'v6';
+const VERSION = 'v7';
 const CACHE = 'photo-renamer-' + VERSION;
 const ASSETS = ['./', './index.html', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/icon-180.png'];
@@ -17,7 +17,8 @@ self.addEventListener('fetch', e => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   e.respondWith(
-    fetch(req).then(res => {
+    // cache:'no-cache' でブラウザのHTTPキャッシュ（GitHub Pagesは10分）を使わず、毎回サーバーに最新か確認する
+    fetch(req, { cache: 'no-cache' }).then(res => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); }
       return res;
     }).catch(() => caches.match(req, { ignoreSearch: true }).then(r => r || caches.match('./index.html')))
