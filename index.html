@@ -25,9 +25,26 @@
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);
   font:15px/1.6 -apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif}
-main{max-width:1000px;margin:0 auto;padding:28px 16px 120px}
+main{max-width:1000px;margin:0 auto;padding:28px 16px 48px}
 h1{font-size:26px;margin:0 0 4px;letter-spacing:.02em}
-.privacy{color:var(--muted);font-size:13px;margin:0 0 20px}
+.privacy{color:var(--muted);font-size:13px;margin:0 0 18px}
+.steps{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media (max-width:640px){.steps{grid-template-columns:repeat(2,1fr)}}
+.steps li{display:flex}
+button.step{flex:1;display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:14px 16px;text-align:left;border-radius:12px;border-width:1.5px}
+.step .num{font-size:13px;font-weight:700;color:var(--muted);font-variant-numeric:tabular-nums}
+.step .lbl{font-size:17px;font-weight:700;line-height:1.3}
+.step .sub{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+button.step.next{background:var(--accent);border-color:var(--accent);color:var(--accent-text)}
+.step.next .num,.step.next .sub{color:inherit;opacity:.85}
+button.step.danger{background:var(--panel);border-color:var(--err);color:var(--err)}
+button.step.next.danger{background:var(--err);color:#fff}
+button:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.tools{margin-top:10px}
+.tools:not(:has(button:not([hidden]))){display:none}
+details.settings{margin-top:12px;font-size:14px}
+details.settings summary{cursor:pointer;color:var(--muted);width:max-content}
+details.settings .row{margin-top:8px}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
 .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
 button{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--text);
@@ -58,7 +75,7 @@ tr.skip td{background:var(--row-skip)}
   padding:12px 16px calc(12px + env(safe-area-inset-bottom,0px))}
 .bar .row{max-width:1000px;margin:0 auto;justify-content:flex-end}
 .help{font-size:13px;color:var(--muted);margin-top:10px}
-.confirm{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:14px;font-weight:600;margin-right:auto}
+.confirm{display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:14px;font-weight:600;margin-top:12px;padding:12px 14px;border:1.5px solid var(--err);border-radius:10px}
 .confirm[hidden]{display:none}
 button.danger{background:var(--err);border-color:var(--err);color:#fff}
 .done{color:var(--ok);font-weight:600}
@@ -74,49 +91,43 @@ td.sel input{width:16px;height:16px}
 <body>
 <main>
   <h1>撮影日時リネーマー</h1>
-  <p class="privacy">写真・動画（AVI）のファイル名を、撮影日時の名前に変更します。ファイルは外部へアップロードされません。</p>
+  <p class="privacy">ファイルは外部に送信されません</p>
+  <div class="msg err" id="unsupported" hidden>このブラウザでは使えません。Google Chromeで開いてください。</div>
 
-  <div class="panel">
-    <div class="row">
-      <button class="primary" id="pickBtn" type="button">フォルダを選択</button>
-      <button id="lastBtn" type="button" hidden>前回のフォルダを開く</button>
-      <button id="installBtn" type="button" hidden>アプリとしてインストール</button>
-      <label class="opt"><input type="checkbox" id="useMtime"> 撮影日時がない場合はファイル更新日時を使用</label>
-      <label class="opt"><input type="checkbox" id="byDate"> コピー時に日付ごとのフォルダに分ける</label>
-    </div>
-    <div class="help">SDカードの「DCIM」フォルダ（または「100MEDIA」など）を選んでください。中のフォルダも対象になります。SDカードはFinderの左側「場所」から開けます。<br>
-    フォルダを選ぶと「ファイルの編集を許可しますか？」と表示されるので「編集を許可」を押してください。<br>
-    「別のドライブにコピー」では、チェックを入れたファイルだけを、変更後の名前で外付けHDなどにコピーします（上書きはしません）。<br>
-    左のチェックで選び、見出しのチェックで全選択／全解除、Shiftキーを押しながらのクリックで範囲をまとめて選べます。<br>
-    「選択したファイルを削除」は、チェックしたファイルをSDカードから消します。コピー済みのものは、消す前にコピー先と中身を照合します。</div>
-    <div class="msg err" id="unsupported" hidden>このブラウザはファイル名の変更に対応していません。Google Chrome で開いてください。<br>（Brave など一部のブラウザでは、この機能が初期設定で使えません）</div>
-    <div class="summary" id="summary">選択：<b>0</b>枚</div>
-    <div class="progress" id="progressBox" hidden><progress id="progress" value="0" max="1"></progress></div>
-    <div class="msg" id="msg"></div>
-    <div class="after" id="after" hidden></div>
+  <ol class="steps">
+    <li><button class="step" id="pickBtn" type="button"><span class="num">1</span><span class="lbl">フォルダを選ぶ</span><span class="sub">SDカードのDCIM</span></button></li>
+    <li><button class="step" id="renameBtn" type="button" disabled><span class="num">2</span><span class="lbl">名前を変更</span><span class="sub" id="renameSub">撮影日時の名前に</span></button></li>
+    <li><button class="step" id="copyBtn" type="button" disabled><span class="num">3</span><span class="lbl">HDにコピー</span><span class="sub" id="copySub">チェックしたファイル</span></button></li>
+    <li><button class="step" id="deleteBtn" type="button" disabled><span class="num">4</span><span class="lbl">SDから削除</span><span class="sub" id="deleteSub">コピー済みは照合して削除</span></button></li>
+  </ol>
+  <div class="row tools">
+    <button id="lastBtn" type="button" hidden>前回のフォルダを開く</button>
+    <button id="undoBtn" type="button" hidden>名前を元に戻す</button>
+    <button id="cancelBtn" type="button" hidden>中止</button>
   </div>
+  <div class="confirm" id="confirmBox" hidden><span id="confirmText"></span>
+    <button id="noBtn" type="button">やめる</button>
+    <button class="primary danger" id="yesBtn" type="button">変更する</button></div>
+  <div class="summary" id="summary"></div>
+  <div class="progress" id="progressBox" hidden><progress id="progress" value="0" max="1"></progress></div>
+  <div class="msg" id="msg"></div>
+  <div class="after" id="after" hidden></div>
+  <details class="settings"><summary>設定</summary>
+    <div class="row">
+      <label class="opt"><input type="checkbox" id="useMtime"> 撮影日時がない写真はファイル更新日時を使う</label>
+      <label class="opt"><input type="checkbox" id="byDate"> コピー先を日付ごとのフォルダに分ける</label>
+      <button id="clearBtn" type="button" disabled>一覧をクリア</button>
+      <button id="installBtn" type="button" hidden>アプリとしてインストール</button>
+    </div>
+  </details>
 
   <div class="table-wrap">
     <table>
       <thead><tr><th class="sel"><input type="checkbox" id="checkAll" checked title="すべて選択／解除"></th><th style="width:28%">元ファイル</th><th style="width:20%">撮影日時</th><th>変更後</th></tr></thead>
-      <tbody id="tbody"><tr><td colspan="4" class="empty">「フォルダを選択」から写真・動画のフォルダを選んでください</td></tr></tbody>
+      <tbody id="tbody"><tr><td colspan="4" class="empty">「1 フォルダを選ぶ」から始めてください</td></tr></tbody>
     </table>
   </div>
 </main>
-
-<div class="bar">
-  <div class="row">
-    <span class="confirm" id="confirmBox" hidden><span id="confirmText"></span>
-      <button id="noBtn" type="button">やめる</button>
-      <button class="primary danger" id="yesBtn" type="button">変更する</button></span>
-    <button id="cancelBtn" type="button" hidden>中止</button>
-    <button id="undoBtn" type="button" hidden>元に戻す</button>
-    <button id="copyBtn" type="button" disabled>別のドライブにコピー</button>
-    <button class="danger-outline" id="deleteBtn" type="button" hidden>SDカードから削除</button>
-    <button id="clearBtn" type="button" disabled>選択を解除</button>
-    <button class="primary" id="renameBtn" type="button" disabled>名前を変更</button>
-  </div>
-</div>
 
 <script>
 'use strict';
@@ -141,7 +152,7 @@ const el = { pickBtn:$('pickBtn'), useMtime:$('useMtime'), summary:$('summary'),
   copyBtn:$('copyBtn'), checkAll:$('checkAll'), deleteBtn:$('deleteBtn'), after:$('after'), byDate:$('byDate'), confirmBox:$('confirmBox'), confirmText:$('confirmText'), yesBtn:$('yesBtn'), noBtn:$('noBtn') };
 
 /* ドラッグ＆ドロップは使わない（誤ってドロップしてもページが切り替わらないように無効化） */
-['dragover','drop'].forEach(t => window.addEventListener(t, e => { e.preventDefault(); if (t === 'drop') setMsg('ドラッグ＆ドロップには対応していません。「フォルダを選択」を使ってください。'); }));
+['dragover','drop'].forEach(t => window.addEventListener(t, e => { e.preventDefault(); if (t === 'drop') setMsg('ドラッグ＆ドロップには対応していません。「フォルダを選ぶ」を使ってください。'); }));
 
 window.addEventListener('error', e => { setMsg('エラーが発生しました：' + (e.message || '不明'), 'err'); });
 window.addEventListener('unhandledrejection', e => { setMsg('エラーが発生しました：' + ((e.reason && e.reason.message) || '不明'), 'err'); });
@@ -666,7 +677,7 @@ function updateSummary(){
   }
   el.clearBtn.disabled = state.busy || total === 0;
   el.renameBtn.disabled = state.busy || todo === 0 || done !== total || !supported();
-  el.renameBtn.textContent = todo ? `名前を変更（${todo}件）` : '名前を変更';
+  setSub('renameSub', todo ? `${todo}件を変更` : '撮影日時の名前に');
   el.undoBtn.hidden = state.busy || state.items.filter(i => i.renamed && !i.deleted).length === 0;
   const nCopy = toCopy().length;
   const nSelectable = selectable().length;
@@ -679,14 +690,23 @@ function updateSummary(){
   el.deleteBtn.hidden = false;
   el.deleteBtn.disabled = state.busy || nDel === 0 || done !== total;
   const nRaw = toDelete().filter(i => !verified(i)).length;
-  el.deleteBtn.textContent = nRaw ? `選択したファイルを削除（${nDel}件・未コピー${nRaw}件を含む）` : `選択したファイルを削除（${nDel}件）`;
+  setSub('deleteSub', nRaw ? `${nDel}件（未コピー${nRaw}件を含む）` : (nDel ? `${nDel}件` : 'コピー済みは照合して削除'));
   el.deleteBtn.classList.toggle('danger', nRaw > 0);
-  el.copyBtn.textContent = nCopy ? `別のドライブにコピー（${nCopy}件）` : '別のドライブにコピー';
+  setSub('copySub', nCopy ? `${nCopy}件` : 'チェックしたファイル');
   el.byDate.disabled = state.busy;
   el.pickBtn.disabled = state.busy || !supported();
   el.lastBtn.disabled = state.busy;
   el.useMtime.disabled = state.busy;
+  // 次に押すボタンだけを強調する
+  let next = 'pickBtn';
+  if (total && done === total){
+    if (todo) next = 'renameBtn';
+    else if (toCopy().some(i => !verified(i))) next = 'copyBtn';
+    else if (nDel) next = 'deleteBtn';
+  }
+  for (const b of [el.pickBtn, el.renameBtn, el.copyBtn, el.deleteBtn]) b.classList.toggle('next', b.id === next && !b.disabled);
 }
+function setSub(id, t){ const e = document.getElementById(id); if (e) e.textContent = t; }
 
 function setBusy(b){
   state.busy = b;
@@ -740,7 +760,7 @@ el.lastBtn.addEventListener('click', async () => {
     // SDカードを抜き差しした場合などは開けないので確認する
     for await (const _ of root.keys()) break;
   } catch (e){
-    setMsg('前回のフォルダが見つかりません。SDカードが挿さっているか確認し、「フォルダを選択」から選び直してください。', 'err');
+    setMsg('前回のフォルダが見つかりません。SDカードが挿さっているか確認し、「フォルダを選ぶ」から選び直してください。', 'err');
     return;
   }
   openRoot(root);
@@ -863,7 +883,7 @@ function resetTable(text){
   el.tbody.textContent = '';
   const tr = document.createElement('tr'); const td = document.createElement('td');
   td.colSpan = 4; td.className = 'empty';
-  td.textContent = text || '「フォルダを選択」から写真・動画のフォルダを選んでください';
+  td.textContent = text || '「1 フォルダを選ぶ」から始めてください';
   tr.appendChild(td); el.tbody.appendChild(tr);
 }
 
@@ -1101,11 +1121,9 @@ async function runDelete(){
   const remain = state.items.filter(i => !i.deleted && i.status !== 'junk').length;
   el.after.textContent = '';
   const lines = [
-    'カメラで録画を再開する前に：',
-    '① Finderのサイドバーで SDカードの「⏏（取り出し）」を押してから抜いてください（そのまま抜くとカードが傷むことがあります）。',
-    '② カメラに挿したら、できればカメラの「フォーマット」を1回行ってください。カードの状態が録画に最適になります（コピーは済んでいます）。',
-    remain ? `※ SDカードには、まだ${remain}件のファイルが残っています。フォーマットすると消えます。` : '※ 選んだファイルはすべて削除しました。'
-  ];
+    '次に：Finderで⏏（取り出し）してから抜き、カメラでフォーマットしてください。',
+    remain ? `SDカードに${remain}件残っています（フォーマットで消えます）。` : ''
+  ].filter(Boolean);
   for (const l of lines){ const d = document.createElement('div'); d.textContent = l; el.after.appendChild(d); }
   el.after.hidden = deleted === 0;
 }
